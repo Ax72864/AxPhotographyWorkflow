@@ -1,0 +1,23 @@
+# Multi-Source Rated Images Downloader Dependencies
+
+# Core dependencies
+requests>=2.31.0
+Pillow>=10.0.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# For Flickr API (optional but recommended)
+# Note: flickrapi is only needed if using Flickr source
+# You can use the REST API directly with requests as implemented
+
+# For progress bars in setup script
+tqdm>=4.65.0
+
+# Standard library modules used (no installation needed):
+# - configparser
+# - json
+# - hashlib
+# - logging
+# - pathlib
+# - zipfile
+# - argparse
