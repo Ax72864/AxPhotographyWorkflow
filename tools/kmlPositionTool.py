@@ -11,7 +11,41 @@ from fractions import Fraction
 import traceback
 import copy
 import exiftool
-import os
+import sys
+import bisect
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def create_exiftool():
+    """创建带有正确编码设置的ExifTool实例，解决中文Windows路径问题
+
+    通过 -charset filename=utf8 告知ExifTool使用UTF-8处理文件名，
+    通过 encoding="utf-8" 告知PyExifTool使用UTF-8进行进程间通信。
+    保留默认的 -G（输出分组前缀）和 -n（数值输出）参数。
+    """
+    common_args = ["-G", "-n", "-charset", "filename=utf8"]
+    try:
+        return exiftool.ExifTool(common_args=common_args, encoding="utf-8")
+    except TypeError:
+        # 旧版本PyExifTool不支持encoding参数
+        print("⚠️  建议升级PyExifTool以获得更好的中文路径支持: pip install --upgrade PyExifTool")
+        return exiftool.ExifTool(common_args=common_args)
+
+
+@contextmanager
+def exiftool_session(et=None):
+    """ExifTool会话管理器：如果提供了已启动的实例则直接复用，否则创建新的"""
+    if et is not None:
+        yield et
+    else:
+        _et = create_exiftool()
+        _et.run()
+        try:
+            yield _et
+        finally:
+            _et.terminate()
+
 
 def bd09_to_wgs84(bd_lon, bd_lat):
     """BD09坐标系转WGS84坐标系"""
@@ -379,25 +413,28 @@ class KMLTrackAnalyzer:
         return summary
     
     def get_position_at_time(self, target_time):
-        """获取指定时间点的位置信息"""
+        """获取指定时间点的位置信息（使用二分查找加速）"""
         if not self.coords or not self.times:
             return None
         
-        # print("self time range:",self.times[0], self.times[-1])
-        # print("target_time:",target_time)
         # 检查时间范围
         if target_time < self.times[0] or target_time > self.times[-1]:
             return None
         
-        # 查找最接近的时间点
-        closest_index = 0
-        min_diff = abs((target_time - self.times[0]).total_seconds())
+        # 使用二分查找定位最接近的时间点（O(log n) 替代原始 O(n) 线性遍历）
+        idx = bisect.bisect_left(self.times, target_time)
         
-        for i, time in enumerate(self.times):
-            diff = abs((target_time - time).total_seconds())
-            if diff < min_diff:
-                min_diff = diff
-                closest_index = i
+        if idx == 0:
+            closest_index = 0
+        elif idx >= len(self.times):
+            closest_index = len(self.times) - 1
+        else:
+            # 比较前后两个点，选择时间差更小的
+            diff_left = abs((target_time - self.times[idx - 1]).total_seconds())
+            diff_right = abs((target_time - self.times[idx]).total_seconds())
+            closest_index = idx - 1 if diff_left <= diff_right else idx
+        
+        min_diff = abs((target_time - self.times[closest_index]).total_seconds())
         
         # 确定是否需要插值
         interpolated = min_diff > 1.0  # and min_diff < 600 # 如果时间差超过1秒则进行插值
@@ -523,10 +560,10 @@ def find_tag_by_id(tag_id):
     
     return results
 
-def update_dng_gps(dng_file_path, latitude, longitude, altitude):
+def update_dng_gps(dng_file_path, latitude, longitude, altitude, et=None):
     """使用ExifTool更新DNG文件中的GPS信息"""
     try:
-        with exiftool.ExifTool() as et:
+        with exiftool_session(et) as _et:
             # 构建ExifTool命令参数
             params = [
                 f"-GPSLatitude={abs(latitude)}",
@@ -545,7 +582,7 @@ def update_dng_gps(dng_file_path, latitude, longitude, altitude):
             
             # 执行更新
             params.append(dng_file_path)
-            et.execute(*params)
+            _et.execute(*params)
             
         return True
         
@@ -554,11 +591,11 @@ def update_dng_gps(dng_file_path, latitude, longitude, altitude):
         traceback.print_exc()
         return False
     
-def has_gps_info(file_path):
+def has_gps_info(file_path, et=None):
     """检查文件是否已有GPS信息"""
     try:
-        with exiftool.ExifTool() as et:
-            output = et.execute('-j', file_path)
+        with exiftool_session(et) as _et:
+            output = _et.execute('-j', file_path)
             if not output:
                 return False, False
             
@@ -591,12 +628,12 @@ def check_xmp_gps_info(xmp_content):
     has_lon = re.search(r'exif:GPSLongitude="[^"]*"', xmp_content) is not None
     return has_lat and has_lon
 
-def update_file_gps(file_path, latitude, longitude, altitude, force_overwrite=False,overwrite_active=False):
+def update_file_gps(file_path, latitude, longitude, altitude, force_overwrite=False, overwrite_active=False, et=None):
     """使用ExifTool更新文件中的GPS信息"""
     # print("Updating GPS for:", file_path)
     try:
         # 检查文件是否已有GPS信息
-        has_gps, is_active = has_gps_info(file_path)
+        has_gps, is_active = has_gps_info(file_path, et)
         
         if is_active and not overwrite_active:
             print(f"🔒 GPS状态为Active，跳过: {os.path.basename(file_path)}")
@@ -606,7 +643,7 @@ def update_file_gps(file_path, latitude, longitude, altitude, force_overwrite=Fa
             print(f"📍 已有GPS信息，跳过: {os.path.basename(file_path)}")
             return False
         
-        with exiftool.ExifTool() as et:
+        with exiftool_session(et) as _et:
             # 构建ExifTool命令参数
             params = [
                 f"-GPSLatitude={abs(latitude)}",
@@ -630,7 +667,7 @@ def update_file_gps(file_path, latitude, longitude, altitude, force_overwrite=Fa
             # 执行更新
             params.append(file_path)
             print("exiftool execute params:", params)
-            et.execute(*params)
+            _et.execute(*params)
             
         return True
         
@@ -756,7 +793,8 @@ def parse_datetime_with_timezone(time_str, tz_offset_hours=8):
     aware_datetime = naive_datetime.replace(tzinfo=tz_info)
     
     return aware_datetime
-def get_file_datetime(file_path):
+
+def get_file_datetime(file_path, et=None):
     """获取文件的拍摄时间"""
     try:
         if file_path.lower().endswith('.xmp'):
@@ -766,13 +804,12 @@ def get_file_datetime(file_path):
             return parse_xmp_metadata_date(content)
         else:
             # 使用 ExifTool 获取其他文件的时间
-            with exiftool.ExifTool() as et:
-                output = et.execute('-j', file_path)
+            with exiftool_session(et) as _et:
+                output = _et.execute('-j', file_path)
                 if not output:
                     return None
                 metadata_list = json.loads(output)
                 
-                # print(metadata_list)
                 # metadata_list 是一个列表，取第一个元素即为该文件的元数据字典
                 metadata = metadata_list[0] if metadata_list else {}
                 
@@ -784,25 +821,124 @@ def get_file_datetime(file_path):
                     'QuickTime:CreateDate',
                     'File:FileModifyDate'
                 ]
-                # print("file:",file_path)
                 for field in time_fields:
                     if field in metadata:
                         time_str = parse_datetime_with_timezone(metadata[field])
-                        # print("field:",field,time_str)
                         return time_str
-                        # try:
-                        #     # 处理不同的时间格式
-                        #     if '+' in time_str or 'Z' in time_str:
-                        #         return to_utc(parse_iso_datetime(time_str))
-                        #     else:
-                        #         # 处理EXIF格式的时间
-                        #         return to_utc(datetime.strptime(time_str, '%Y:%m:%d %H:%M:%S'))
-                        # except Exception:
-                        #     continue
         return None
     except Exception as e:
         print(f"⚠️  获取文件时间失败 {os.path.basename(file_path)}: {e}")
         return None
+
+
+def batch_get_file_datetimes(file_paths, et, batch_size=200):
+    """批量获取文件拍摄时间
+
+    对非XMP文件使用ExifTool批量读取（一次命令处理多个文件），
+    对XMP文件使用多线程并行读取，大幅减少总耗时。
+
+    Args:
+        file_paths: 文件路径列表
+        et: 已启动的ExifTool实例
+        batch_size: 每批通过ExifTool处理的文件数
+
+    Returns:
+        dict: {file_path: datetime} 映射
+    """
+    results = {}
+
+    # 分离XMP和非XMP文件
+    xmp_files = []
+    non_xmp_files = []
+    for fp in file_paths:
+        if fp.lower().endswith('.xmp'):
+            xmp_files.append(fp)
+        else:
+            non_xmp_files.append(fp)
+
+    # 并行处理XMP文件（纯文件I/O，不需要ExifTool）
+    if xmp_files:
+        def read_xmp_time(fp):
+            try:
+                with open(fp, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return fp, parse_xmp_metadata_date(content)
+            except Exception as e:
+                return fp, None
+
+        with ThreadPoolExecutor(max_workers=min(8, len(xmp_files))) as executor:
+            futures = [executor.submit(read_xmp_time, fp) for fp in xmp_files]
+            for future in as_completed(futures):
+                fp, dt = future.result()
+                if dt is not None:
+                    results[fp] = dt
+                else:
+                    print(f"⚠️  无法解析时间: {os.path.basename(fp)}")
+
+    # 批量处理非XMP文件（通过ExifTool一次命令读取多个文件的元数据）
+    total = len(file_paths)
+    processed = len(xmp_files)
+
+    time_fields = [
+        'EXIF:DateTimeOriginal',
+        'EXIF:CreateDate',
+        'EXIF:DateTime',
+        'QuickTime:CreateDate',
+        'File:FileModifyDate'
+    ]
+
+    for i in range(0, len(non_xmp_files), batch_size):
+        batch = non_xmp_files[i:i + batch_size]
+        try:
+            # 一次ExifTool命令读取整批文件的时间相关标签
+            output = et.execute(
+                '-j',
+                '-DateTimeOriginal', '-CreateDate',
+                '-DateTime', '-FileModifyDate',
+                *batch
+            )
+
+            if output:
+                metadata_list = json.loads(output)
+                for j, metadata in enumerate(metadata_list):
+                    if j >= len(batch):
+                        break
+                    fp = batch[j]
+
+                    parsed = False
+                    for field in time_fields:
+                        if field in metadata:
+                            try:
+                                dt = parse_datetime_with_timezone(metadata[field])
+                                results[fp] = dt
+                                parsed = True
+                                break
+                            except Exception:
+                                continue
+
+                    if not parsed:
+                        print(f"⚠️  无法解析时间: {os.path.basename(fp)}")
+            else:
+                for fp in batch:
+                    print(f"⚠️  无法解析时间: {os.path.basename(fp)}")
+
+        except Exception as e:
+            # 批量读取失败时，逐个处理作为回退
+            for fp in batch:
+                try:
+                    dt = get_file_datetime(fp, et)
+                    if dt is not None:
+                        results[fp] = dt
+                    else:
+                        print(f"⚠️  无法解析时间: {os.path.basename(fp)}")
+                except Exception as e2:
+                    print(f"❌ 读取文件失败: {os.path.basename(fp)} - {e2}")
+
+        processed += len(batch)
+        print(f"\r进度: {processed}/{total} ({processed / total * 100:.2f}%)", end="")
+
+    return results
+
 
 def fix_photos_gps(kml_file, photos_dir, force_overwrite=False,overwrite_active=False):
     """修复照片的GPS信息"""
@@ -835,95 +971,92 @@ def fix_photos_gps(kml_file, photos_dir, force_overwrite=False,overwrite_active=
     
     print(f"📁 找到 {len(files_to_process)} 个需要处理的文件")
     
-    # 解析所有文件的时间信息并排序
-    print("📅 正在解析时间信息...")
-    file_time_list = []
-    total_files = len(files_to_process)
-    for index, file_path in enumerate(files_to_process, start=1):
-    # for file_path in files_to_process:
-        try:
-            # 获取文件时间
-            photo_time = get_file_datetime(file_path)
-            # print("photo time: ",photo_time, file_path)
-            if photo_time is not None:
-                file_time_list.append((file_path, photo_time))
-            else:
-                print(f"⚠️  无法解析时间: {os.path.basename(file_path)}")
-                
-        except Exception as e:
-            print(f"❌ 读取文件失败: {os.path.basename(file_path)} - {e}")
-        print(f"\r进度: {index}/{total_files} ({(index / total_files) * 100:.2f}%)",end="")
-    if not file_time_list:
-        print("❌ 没有找到任何有效的时间信息")
-        return
-    print("\n✅ 时间解析完成")
-    
-    # 按时间排序
-    file_time_list.sort(key=lambda x: x[1])
-    print(f"✅ 按时间排序完成，共 {len(file_time_list)} 个文件有效")
-    print(f"⏰ 时间范围: {file_time_list[0][1]} 到 {file_time_list[-1][1]}")
-    
-    # 统计信息
-    processed_count = len(file_time_list)
-    updated_count = 0
-    error_count = 0
-    out_of_range_count = 0
-    skipped_count = 0
-    
-    # 按时间顺序处理文件
-    for i, (file_path, photo_time) in enumerate(file_time_list):
-        try:
-            # 显示进度
-            progress = f"[{i+1}/{len(file_time_list)}]"
-            # 从轨迹中获取对应位置
-            position_info = analyzer.get_position_at_time(photo_time)
-            
-            if position_info is None:
-                out_of_range_count += 1
-                print(f"{progress} ⚠️ 时间超出轨迹范围，跳过: {os.path.basename(file_path)}")
-                continue
-            
-            # 提取WGS84坐标
-            wgs84_coords = position_info['coordinates']['WGS84']
-            latitude = wgs84_coords['latitude']
-            longitude = wgs84_coords['longitude']
-            altitude = position_info['altitude_meters']
-            
-            # 更新文件GPS信息
-            success = False
-            if file_path.lower().endswith('.xmp'):
-                success = update_xmp_gps(file_path, latitude, longitude, altitude, force_overwrite)
-                
-                # 检查并更新对应的DNG文件
-                xmp_dir = os.path.dirname(file_path)
-                xmp_basename = os.path.basename(file_path)
-                xmp_name_without_ext = os.path.splitext(xmp_basename)[0]
-                
-            else:
-                success = update_file_gps(file_path, latitude, longitude, altitude, force_overwrite,overwrite_active)
+    # 创建单个ExifTool实例，在整个处理流程中复用，避免反复启停进程
+    et = create_exiftool()
+    et.run()
 
-            basename = os.path.basename(file_path)
-            name_without_ext = os.path.splitext(basename)[0]
-            # 构造DNG文件名：A.xmp => A-已增强-降噪.dng
-            dng_filename = f"{name_without_ext}-已增强-降噪.dng"
-            dng_file_path = os.path.join(os.path.dirname(file_path), dng_filename)
-            if os.path.exists(dng_file_path):
-                if update_file_gps(dng_file_path, latitude, longitude, altitude, force_overwrite,overwrite_active):
-                    print(f"📷 DNG文件GPS已更新: {dng_filename}")
+    try:
+        # 批量解析所有文件的时间信息
+        print("📅 正在解析时间信息...")
+        file_times = batch_get_file_datetimes(files_to_process, et)
+
+        file_time_list = [(fp, dt) for fp, dt in file_times.items()]
+
+        if not file_time_list:
+            print("\n❌ 没有找到任何有效的时间信息")
+            return
+        print("\n✅ 时间解析完成")
+        
+        # 按时间排序
+        file_time_list.sort(key=lambda x: x[1])
+        print(f"✅ 按时间排序完成，共 {len(file_time_list)} 个文件有效")
+        print(f"⏰ 时间范围: {file_time_list[0][1]} 到 {file_time_list[-1][1]}")
+        
+        # 统计信息
+        processed_count = len(file_time_list)
+        updated_count = 0
+        error_count = 0
+        out_of_range_count = 0
+        skipped_count = 0
+        
+        # 按时间顺序处理文件
+        for i, (file_path, photo_time) in enumerate(file_time_list):
+            try:
+                # 显示进度
+                progress = f"[{i+1}/{len(file_time_list)}]"
+                # 从轨迹中获取对应位置（已使用二分查找加速）
+                position_info = analyzer.get_position_at_time(photo_time)
+                
+                if position_info is None:
+                    out_of_range_count += 1
+                    print(f"{progress} ⚠️ 时间超出轨迹范围，跳过: {os.path.basename(file_path)}")
+                    continue
+                
+                # 提取WGS84坐标
+                wgs84_coords = position_info['coordinates']['WGS84']
+                latitude = wgs84_coords['latitude']
+                longitude = wgs84_coords['longitude']
+                altitude = position_info['altitude_meters']
+                
+                # 更新文件GPS信息
+                success = False
+                if file_path.lower().endswith('.xmp'):
+                    success = update_xmp_gps(file_path, latitude, longitude, altitude, force_overwrite)
+                    
+                    # 检查并更新对应的DNG文件
+                    xmp_dir = os.path.dirname(file_path)
+                    xmp_basename = os.path.basename(file_path)
+                    xmp_name_without_ext = os.path.splitext(xmp_basename)[0]
+                    
+                else:
+                    success = update_file_gps(file_path, latitude, longitude, altitude, force_overwrite, overwrite_active, et)
+
+                basename = os.path.basename(file_path)
+                name_without_ext = os.path.splitext(basename)[0]
+                # 构造DNG文件名：A.xmp => A-已增强-降噪.dng
+                dng_filename = f"{name_without_ext}-已增强-降噪.dng"
+                dng_file_path = os.path.join(os.path.dirname(file_path), dng_filename)
+                if os.path.exists(dng_file_path):
+                    if update_file_gps(dng_file_path, latitude, longitude, altitude, force_overwrite, overwrite_active, et):
+                        print(f"📷 DNG文件GPS已更新: {dng_filename}")
 
 
-            if success:
-                updated_count += 1
-                time_diff = position_info['time_difference_seconds']
-                interpolated = "插值" if position_info['interpolated'] else "精确"
-                print(f"{progress} ✅ 已更新: {os.path.basename(file_path)} ({interpolated}, 时差{time_diff:.1f}s)")
-            else:
-                skipped_count += 1
-                
-        except Exception as e:
-            error_count += 1
-            print(f"{progress} ❌ 处理文件失败: {os.path.basename(file_path)} - {e}")
-            traceback.print_exc()
+                if success:
+                    updated_count += 1
+                    time_diff = position_info['time_difference_seconds']
+                    interpolated = "插值" if position_info['interpolated'] else "精确"
+                    print(f"{progress} ✅ 已更新: {os.path.basename(file_path)} ({interpolated}, 时差{time_diff:.1f}s)")
+                else:
+                    skipped_count += 1
+                    
+            except Exception as e:
+                error_count += 1
+                print(f"{progress} ❌ 处理文件失败: {os.path.basename(file_path)} - {e}")
+                traceback.print_exc()
+
+    finally:
+        # 确保ExifTool进程被正确关闭
+        et.terminate()
     
     # 打印统计结果
     print("\n" + "="*60)
