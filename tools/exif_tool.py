@@ -4,6 +4,7 @@ import sys
 import subprocess
 import datetime
 import glob
+import tempfile
 
 # ================= 配置区域 =================
 # 请确保此处路径正确
@@ -35,12 +36,23 @@ def get_files(path):
         
     return list(set(files))
 
-def run_exiftool(args):
-    """运行 exiftool 命令"""
+def run_exiftool(args, file_paths=None):
+    """运行 exiftool 命令
+
+    Args:
+        args: exiftool 选项参数列表（不含文件路径）
+        file_paths: 文件路径列表，通过命令行直接传递而非 argfile，
+                    避免路径中的方括号被 exiftool argfile 解析为 glob 通配符
+    """
     # -m: 忽略次要错误
     # -overwrite_original: 覆盖原文件
-    cmd = [EXIFTOOL_PATH, '-overwrite_original', '-m'] + args
-    
+    base_args = ['-overwrite_original', '-m', '-charset', 'iptc=utf8']
+    all_args = base_args + args
+
+    # 使用 -@ argfile 通过 UTF-8 临时文件传递选项参数，
+    # 避免 Windows 命令行 ANSI 编码导致中文参数（如 XPKeywords）乱码。
+    # 文件路径单独通过命令行传递，避免方括号等特殊字符被 argfile 误解释。
+    argfile = None
     try:
         # 在 Windows 上隐藏控制台窗口 (可选)
         startupinfo = None
@@ -48,6 +60,16 @@ def run_exiftool(args):
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
+        argfile = tempfile.NamedTemporaryFile(
+            mode='w', encoding='utf-8', suffix='.args',
+            delete=False, newline='\n'
+        )
+        argfile.write('\n'.join(all_args))
+        argfile.close()
+
+        cmd = [EXIFTOOL_PATH, '-@', argfile.name]
+        if file_paths:
+            cmd.extend(file_paths)
         result = subprocess.run(
             cmd, 
             capture_output=True, 
@@ -60,6 +82,9 @@ def run_exiftool(args):
     except FileNotFoundError:
         print(f"错误: 找不到 exiftool，请检查路径: {EXIFTOOL_PATH}")
         sys.exit(1)
+    finally:
+        if argfile and os.path.exists(argfile.name):
+            os.unlink(argfile.name)
 
 def get_best_time(file_path, sync_mode):
     """智能获取基准时间"""
@@ -67,8 +92,8 @@ def get_best_time(file_path, sync_mode):
     ctime_sys = datetime.datetime.fromtimestamp(stat.st_ctime)
     mtime_sys = datetime.datetime.fromtimestamp(stat.st_mtime)
     
-    cmd = ['-DateTimeOriginal', '-d', '%Y:%m:%d %H:%M:%S', file_path]
-    result = run_exiftool(cmd)
+    cmd = ['-DateTimeOriginal', '-d', '%Y:%m:%d %H:%M:%S']
+    result = run_exiftool(cmd, [file_path])
     
     stime_exif = None
     if result.stdout:
@@ -165,10 +190,8 @@ def smart_repair_and_modify(file_path, target_time, args):
 
     # -----------------------------------------------------
     
-    cmd_args.append(file_path)
-    
     # 执行命令
-    result = run_exiftool(cmd_args)
+    result = run_exiftool(cmd_args, [file_path])
     
     if result.returncode == 0:
         print(f"  Exif 修复与修改成功。")
@@ -187,9 +210,8 @@ def smart_repair_and_modify(file_path, target_time, args):
         sys_time_cmd = [
             f'-FileCreateDate={time_str}',
             f'-FileModifyDate={time_str}',
-            file_path
         ]
-        run_exiftool(sys_time_cmd)
+        run_exiftool(sys_time_cmd, [file_path])
         print(f"  时间已同步为: {time_str}")
 
 def main():
