@@ -133,6 +133,18 @@ def parse_iso_datetime(time_str):
     else:
         return datetime.fromisoformat(time_str)
 
+_LOCAL_TZ = datetime.now().astimezone().tzinfo
+
+def fmt_local(dt):
+    """将 datetime 转换为本机时区字符串显示"""
+    if dt is None:
+        return "未知"
+    if isinstance(dt, str):
+        dt = datetime.fromisoformat(dt)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(_LOCAL_TZ)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
 def calculate_distance(lat1, lon1, lat2, lon2):
     """计算两点间距离（米）"""
     R = 6371000  # 地球半径，米
@@ -238,7 +250,7 @@ class KMLTrackAnalyzer:
         if self.track_segments:
             print(f"轨迹片段详情:")
             for i, segment in enumerate(self.track_segments):
-                print(f"  片段{i+1}: {segment['name']} - {segment['point_count']}个点 ({segment['start_time']} 到 {segment['end_time']})")
+                print(f"  片段{i+1}: {segment['name']} - {segment['point_count']}个点 ({fmt_local(segment['start_time'])} 到 {fmt_local(segment['end_time'])})")
     
     def _parse_track_segment(self, placemark, namespaces, segment_num):
         """解析单个轨迹片段"""
@@ -377,8 +389,8 @@ class KMLTrackAnalyzer:
             "轨迹描述": self.track_description,
             "轨迹片段数": len(self.track_segments),
             "总轨迹点数": len(self.coords),
-            "开始时间": start_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "结束时间": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "开始时间": fmt_local(start_time),
+            "结束时间": fmt_local(end_time),
             "持续时间": str(duration),
             "总距离": f"{total_distance/1000:.2f} 公里",
             "最低海拔": f"{min_alt:.1f} 米",
@@ -405,8 +417,8 @@ class KMLTrackAnalyzer:
                     "片段名称": segment['name'],
                     "点数": segment['point_count'],
                     "距离": f"{segment_distance/1000:.2f} 公里",
-                    "开始时间": segment['start_time'].strftime("%Y-%m-%d %H:%M:%S") if segment['start_time'] else "未知",
-                    "结束时间": segment['end_time'].strftime("%Y-%m-%d %H:%M:%S") if segment['end_time'] else "未知",
+                    "开始时间": fmt_local(segment['start_time']),
+                    "结束时间": fmt_local(segment['end_time']),
                     "持续时间": str(segment_duration) if segment_duration else "未知"
                 })
         
@@ -439,7 +451,7 @@ class KMLTrackAnalyzer:
         # 确定是否需要插值
         interpolated = min_diff > 1.0  # and min_diff < 600 # 如果时间差超过1秒则进行插值
         if min_diff >= 180:
-            print(f"时间差过大，坐标可能偏差较大: {target_time}  差值: {min_diff}")
+            print(f"时间差过大，坐标可能偏差较大: {fmt_local(target_time)}  差值: {min_diff}")
         # print("closest_index:",closest_index,"min_diff:",min_diff,"interpolated:",interpolated)
         if interpolated:
             # 找到插值用的前后两个点
@@ -959,7 +971,7 @@ def fix_photos_gps(kml_file, photos_dir, force_overwrite=False,overwrite_active=
         print("❌ KML文件中没有时间信息，无法进行GPS修复")
         return
     
-    print(f"📊 轨迹信息: {len(analyzer.coords)} 个点，时间范围 {analyzer.times[0]} 到 {analyzer.times[-1]}")
+    print(f"📊 轨迹信息: {len(analyzer.coords)} 个点，时间范围 {fmt_local(analyzer.times[0])} 到 {fmt_local(analyzer.times[-1])}")
     
     # 查找需要处理的文件
     print("🔍 正在查找需要处理的文件...")
@@ -990,7 +1002,7 @@ def fix_photos_gps(kml_file, photos_dir, force_overwrite=False,overwrite_active=
         # 按时间排序
         file_time_list.sort(key=lambda x: x[1])
         print(f"✅ 按时间排序完成，共 {len(file_time_list)} 个文件有效")
-        print(f"⏰ 时间范围: {file_time_list[0][1]} 到 {file_time_list[-1][1]}")
+        print(f"⏰ 时间范围: {fmt_local(file_time_list[0][1])} 到 {fmt_local(file_time_list[-1][1])}")
         
         # 统计信息
         processed_count = len(file_time_list)
@@ -1119,8 +1131,8 @@ def main():
                     print("\n" + "="*60)
                     print(f"📍 时间点 {args.time} 的位置信息")
                     print("="*60)
-                    print(f"查询时间: {result['timestamp']}")
-                    print(f"最近轨迹点时间: {result['closest_time']}")
+                    print(f"查询时间: {fmt_local(result['timestamp'])}")
+                    print(f"最近轨迹点时间: {fmt_local(result['closest_time'])}")
                     print(f"时间差: {result['time_difference_seconds']:.1f} 秒")
                     print(f"在轨迹范围内: {'是' if result['in_range'] else '否'}")
                     print(f"插值计算: {'是' if result['interpolated'] else '否'}")
