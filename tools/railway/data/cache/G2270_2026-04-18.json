@@ -1,0 +1,90 @@
+{
+  "train_code": "G2270",
+  "train_no": "6c000G22700A",
+  "depart_date": "2026-04-18",
+  "from": "长沙南",
+  "to": "深圳北",
+  "fetched_at": "2026-04-20T13:39:39+08:00",
+  "stations": [
+    {
+      "no": 1,
+      "name": "长沙南",
+      "arrive": null,
+      "start": "07:29",
+      "day": 0,
+      "running": "00:00"
+    },
+    {
+      "no": 2,
+      "name": "萍乡北",
+      "arrive": "07:56",
+      "start": "07:58",
+      "day": 0,
+      "running": "00:27"
+    },
+    {
+      "no": 3,
+      "name": "南昌西",
+      "arrive": "08:55",
+      "start": "09:04",
+      "day": 0,
+      "running": "01:26"
+    },
+    {
+      "no": 4,
+      "name": "吉水西",
+      "arrive": "09:55",
+      "start": "09:57",
+      "day": 0,
+      "running": "02:26"
+    },
+    {
+      "no": 5,
+      "name": "万安县",
+      "arrive": "10:21",
+      "start": "10:23",
+      "day": 0,
+      "running": "02:52"
+    },
+    {
+      "no": 6,
+      "name": "赣县北",
+      "arrive": "10:46",
+      "start": "10:48",
+      "day": 0,
+      "running": "03:17"
+    },
+    {
+      "no": 7,
+      "name": "赣州西",
+      "arrive": "11:02",
+      "start": "11:07",
+      "day": 0,
+      "running": "03:33"
+    },
+    {
+      "no": 8,
+      "name": "和平北",
+      "arrive": "11:46",
+      "start": "11:48",
+      "day": 0,
+      "running": "04:17"
+    },
+    {
+      "no": 9,
+      "name": "东莞南",
+      "arrive": "12:43",
+      "start": "12:45",
+      "day": 0,
+      "running": "05:14"
+    },
+    {
+      "no": 10,
+      "name": "深圳北",
+      "arrive": "13:05",
+      "start": "13:05",
+      "day": 0,
+      "running": "05:36"
+    }
+  ]
+}

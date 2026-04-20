@@ -1,0 +1,1642 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KML 轨迹编辑器</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #1a1a2e;
+  --bg-secondary: #16213e;
+  --bg-panel: #0f3460;
+  --accent: #e94560;
+  --accent2: #0ea5e9;
+  --text: #e0e0e0;
+  --text-muted: #8892a4;
+  --border: #2a3a5e;
+  --highlight: #f59e0b;
+  --success: #22c55e;
+  --danger: #ef4444;
+  --export-range: #a855f7;
+}
+html, body { height: 100%; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+/* ---- Toolbar ---- */
+#toolbar {
+  display: flex; align-items: center; gap: 6px; padding: 6px 12px;
+  background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+  flex-shrink: 0; flex-wrap: wrap; z-index: 100;
+}
+#toolbar .sep { width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
+.btn {
+  padding: 5px 12px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg-panel); color: var(--text); cursor: pointer;
+  font-size: 13px; white-space: nowrap; transition: all .15s; user-select: none;
+}
+.btn:hover { border-color: var(--accent2); color: #fff; }
+.btn.primary { background: var(--accent); border-color: var(--accent); }
+.btn.primary:hover { background: #d1364d; }
+.btn.danger { border-color: var(--danger); color: var(--danger); }
+.btn.danger:hover { background: var(--danger); color: #fff; }
+.btn.small { padding: 3px 8px; font-size: 12px; }
+.btn:disabled { opacity: .4; cursor: not-allowed; pointer-events: none; }
+#toolbar .info-text { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+
+/* ---- Main area ---- */
+#main { display: flex; flex: 1; min-height: 0; }
+#map-container { flex: 1; position: relative; }
+#map { width: 100%; height: 100%; }
+
+/* ---- Side panel ---- */
+#side-panel {
+  width: 340px; background: var(--bg-secondary); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+  transition: width .25s ease;
+}
+#side-panel.collapsed { width: 0; border-left: none; padding: 0; }
+#panel-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.panel-tab {
+  flex: 1; padding: 8px; text-align: center; font-size: 13px;
+  cursor: pointer; border-bottom: 2px solid transparent; transition: all .15s;
+}
+.panel-tab.active { border-bottom-color: var(--accent2); color: #fff; }
+.panel-tab:hover { background: rgba(255,255,255,.05); }
+#panel-content { flex: 1; overflow-y: auto; padding: 10px; }
+
+.detail-group { margin-bottom: 12px; }
+.detail-group label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 3px; text-transform: uppercase; letter-spacing: .5px; }
+.detail-group input, .detail-group select {
+  width: 100%; padding: 5px 8px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 3px; color: var(--text); font-size: 13px;
+}
+.detail-group input:focus { border-color: var(--accent2); outline: none; }
+.detail-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+
+.point-list { font-size: 12px; }
+.point-item {
+  display: flex; align-items: center; gap: 6px; padding: 5px 6px;
+  border-bottom: 1px solid rgba(255,255,255,.05); cursor: pointer; transition: background .1s;
+}
+.point-item:hover { background: rgba(255,255,255,.05); }
+.point-item.active { background: rgba(14,165,233,.15); border-left: 2px solid var(--accent2); }
+.point-item.imported { border-left: 2px solid var(--highlight); }
+.point-item.imported.active { border-left: 2px solid var(--accent); }
+.point-item .idx { color: var(--text-muted); min-width: 32px; text-align: right; }
+.point-item .time { flex: 1; }
+.point-item .alt { color: var(--highlight); min-width: 50px; text-align: right; }
+.point-item .src-badge {
+  font-size: 9px; padding: 1px 4px; border-radius: 2px;
+  background: var(--highlight); color: #1a1a2e; font-weight: 600;
+}
+
+/* ---- Timeline bar ---- */
+#timeline-bar {
+  flex-shrink: 0; background: var(--bg-secondary); border-top: 1px solid var(--border);
+  display: flex; flex-direction: column;
+}
+#timeline-controls {
+  display: flex; align-items: center; gap: 4px; padding: 3px 8px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#timeline-controls .tl-label { font-size: 11px; color: var(--text-muted); margin-right: 2px; }
+#timeline-container {
+  height: 56px; position: relative; flex-shrink: 0;
+}
+#timeline-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }
+#timeline-overlay {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: pointer;
+}
+#timeline-cursor {
+  position: absolute; top: 0; width: 2px; height: 100%; background: var(--accent);
+  pointer-events: none; z-index: 2;
+}
+#timeline-hover-info {
+  position: absolute; top: 2px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,.8); padding: 2px 8px; border-radius: 3px;
+  font-size: 11px; pointer-events: none; white-space: nowrap; display: none; z-index: 5;
+}
+/* Export range markers on timeline */
+.tl-range-marker {
+  position: absolute; top: 0; width: 2px; height: 100%; z-index: 3; pointer-events: none;
+}
+.tl-range-marker.start { background: var(--export-range); }
+.tl-range-marker.end { background: var(--export-range); }
+#tl-range-fill {
+  position: absolute; top: 0; height: 100%; background: rgba(168,85,247,.15);
+  pointer-events: none; z-index: 1; display: none;
+}
+
+/* ---- Export range panel ---- */
+.export-range-panel { padding: 10px; }
+.export-range-panel label { display: block; font-size: 12px; margin-bottom: 4px; color: var(--text-muted); }
+.export-range-panel select, .export-range-panel input {
+  width: 100%; padding: 5px; margin-bottom: 8px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-size: 12px;
+}
+.export-range-info {
+  font-size: 12px; color: var(--text-muted); padding: 6px 0;
+  border-top: 1px solid var(--border); margin-top: 4px;
+}
+
+/* ---- Context Menu ---- */
+#context-menu {
+  position: fixed; display: none; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 0; z-index: 9999; min-width: 160px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4);
+}
+#context-menu .menu-item {
+  padding: 6px 16px; font-size: 13px; cursor: pointer; transition: background .1s;
+}
+#context-menu .menu-item:hover { background: rgba(14,165,233,.2); }
+
+/* ---- Modal ---- */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px;
+  padding: 20px; min-width: 320px; max-width: 480px;
+}
+.modal.wide { max-width: 640px; width: 92vw; }
+.modal h3 { margin-bottom: 12px; font-size: 15px; }
+.modal .form-row { margin-bottom: 10px; }
+.modal .form-row label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 3px; }
+.modal .form-row input, .modal .form-row select, .modal .form-row textarea {
+  width: 100%; padding: 6px 8px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 3px; color: var(--text); font-size: 13px; font-family: inherit;
+}
+.modal .form-row textarea { min-height: 140px; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+.modal .form-row input:focus, .modal .form-row select:focus, .modal .form-row textarea:focus { border-color: var(--accent2); outline: none; }
+.modal .form-row .row-inline { display: flex; gap: 8px; align-items: center; }
+.modal .form-row .row-inline > * { flex: 1; }
+.modal .form-row .checkbox-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+.modal .form-row .checkbox-row input[type="checkbox"] { width: auto; }
+.modal .modal-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.modal .modal-tab {
+  padding: 6px 12px; cursor: pointer; font-size: 13px; color: var(--text-muted);
+  border-bottom: 2px solid transparent; user-select: none;
+}
+.modal .modal-tab.active { color: var(--text); border-bottom-color: var(--accent2); }
+.modal .help-tip {
+  background: rgba(14,165,233,0.08); border-left: 3px solid var(--accent2);
+  padding: 8px 10px; font-size: 12px; line-height: 1.6; color: var(--text-muted);
+  border-radius: 3px; margin-bottom: 10px;
+}
+.modal .help-tip code { background: rgba(0,0,0,0.35); padding: 1px 5px; border-radius: 3px; color: #e0e6ee; font-size: 11px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.modal-actions .spacer { flex: 1; }
+
+/* Toast */
+#toast-container { position: fixed; top: 60px; right: 16px; z-index: 10001; display: flex; flex-direction: column; gap: 6px; }
+.toast { padding: 8px 16px; border-radius: 4px; font-size: 13px; animation: toast-in .2s ease; max-width: 360px; }
+.toast.info { background: var(--accent2); color: #fff; }
+.toast.success { background: var(--success); color: #fff; }
+.toast.error { background: var(--danger); color: #fff; }
+.toast.warn { background: var(--highlight); color: #1a1a2e; }
+@keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4a5a7e; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="toolbar">
+    <button class="btn primary" onclick="document.getElementById('file-kml').click()">加载 KML</button>
+    <input type="file" id="file-kml" accept=".kml" style="display:none" onchange="handleLoadKML(event)">
+    <button class="btn" onclick="document.getElementById('file-csv').click()" id="btn-import-csv">导入 CSV</button>
+    <input type="file" id="file-csv" accept=".csv,.txt" style="display:none" onchange="handleImportCSV(event)">
+    <button class="btn" onclick="document.getElementById('file-img').click()" id="btn-import-img">导入图片</button>
+    <input type="file" id="file-img" accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,.heic,.heif,.png" multiple style="display:none" onchange="handleImportImages(event)">
+    <button class="btn" onclick="addNewPointFromToolbar()">新建点</button>
+    <button class="btn" onclick="showTrainImportModal()" title="按车次号导入铁路行程轨迹（schedule JSON 由 tools/railway/ 生成）">按车次导入</button>
+    <div class="sep"></div>
+    <button class="btn" onclick="undo()" id="btn-undo" disabled title="撤销 (Ctrl+Z)">↩ 撤销</button>
+    <button class="btn" onclick="redo()" id="btn-redo" disabled title="恢复 (Ctrl+Y)">↪ 恢复</button>
+    <div class="sep"></div>
+    <button class="btn" onclick="exportKML()" id="btn-export-kml" disabled>导出 KML</button>
+    <button class="btn" onclick="exportGPX()" id="btn-export-gpx" disabled>导出 GPX</button>
+    <button class="btn" onclick="showExportRangePanel()" id="btn-export-partial" disabled>导出部分轨迹</button>
+    <div class="sep"></div>
+    <button class="btn" onclick="togglePanel()" id="btn-panel">面板</button>
+    <span class="info-text" id="status-text">请加载 KML 文件开始</span>
+  </div>
+
+  <div id="main">
+    <div id="map-container">
+      <div id="map"></div>
+    </div>
+    <div id="side-panel">
+      <div id="panel-tabs">
+        <div class="panel-tab active" data-tab="detail" onclick="switchTab('detail')">点详情</div>
+        <div class="panel-tab" data-tab="list" onclick="switchTab('list')">点列表</div>
+        <div class="panel-tab" data-tab="imported" onclick="switchTab('imported')">导入点</div>
+        <div class="panel-tab" data-tab="export" onclick="switchTab('export')">导出</div>
+      </div>
+      <div id="panel-content">
+        <div id="tab-detail">
+          <p style="color:var(--text-muted);font-size:13px;">点击地图上的标记点或从列表中选择以查看详情</p>
+        </div>
+        <div id="tab-list" style="display:none">
+          <div class="point-list" id="point-list-container"></div>
+        </div>
+        <div id="tab-imported" style="display:none">
+          <p style="color:var(--text-muted);font-size:12px;margin-bottom:8px;">通过图片导入的记录点</p>
+          <div class="point-list" id="imported-list-container">
+            <p style="color:var(--text-muted);font-size:13px;padding:10px;">暂无导入点</p>
+          </div>
+        </div>
+        <div id="tab-export" style="display:none">
+          <div class="export-range-panel">
+            <label>选择方式</label>
+            <select id="export-mode" onchange="updateExportRangeUI()">
+              <option value="point">按起止点序号</option>
+              <option value="time">按时间范围</option>
+            </select>
+            <div id="export-point-fields">
+              <label>起始点序号</label>
+              <input type="number" id="export-start-idx" min="0" value="0" onchange="onExportRangeChanged()">
+              <label>结束点序号</label>
+              <input type="number" id="export-end-idx" min="0" value="0" onchange="onExportRangeChanged()">
+            </div>
+            <div id="export-time-fields" style="display:none">
+              <label>起始时间</label>
+              <input type="datetime-local" id="export-start-time" step="1" onchange="onExportRangeChanged()">
+              <label>结束时间</label>
+              <input type="datetime-local" id="export-end-time" step="1" onchange="onExportRangeChanged()">
+            </div>
+            <div class="export-range-info" id="export-range-info"></div>
+            <div style="display:flex;gap:6px;margin-top:8px;">
+              <button class="btn" onclick="exportPartialKML()">导出 KML</button>
+              <button class="btn" onclick="exportPartialGPX()">导出 GPX</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Timeline bar -->
+  <div id="timeline-bar">
+    <div id="timeline-controls">
+      <button class="btn small" onclick="selectPrev()" title="上一个点 (←)">◀</button>
+      <button class="btn small" onclick="selectNext()" title="下一个点 (→)">▶</button>
+      <div class="sep" style="height:18px;margin:0 2px;"></div>
+      <span class="tl-label">模式:</span>
+      <button class="btn small" id="btn-tl-index" style="border-color:var(--accent2);color:#fff;" onclick="setTimelineMode('index')">序号</button>
+      <button class="btn small" id="btn-tl-time" onclick="setTimelineMode('time')">时间</button>
+      <div class="sep" style="height:18px;margin:0 2px;"></div>
+      <button class="btn small" onclick="markExportStart()" title="标记当前位置为导出起点" style="border-color:var(--export-range);color:var(--export-range);">标记起点</button>
+      <button class="btn small" onclick="markExportEnd()" title="标记当前位置为导出终点" style="border-color:var(--export-range);color:var(--export-range);">标记终点</button>
+      <button class="btn small" onclick="clearExportRange()" title="清除导出范围">清除范围</button>
+    </div>
+    <div id="timeline-container">
+      <canvas id="timeline-canvas"></canvas>
+      <div id="tl-range-fill"></div>
+      <div class="tl-range-marker start" id="tl-marker-start" style="display:none;"></div>
+      <div class="tl-range-marker end" id="tl-marker-end" style="display:none;"></div>
+      <div id="timeline-cursor" style="left:0;"></div>
+      <div id="timeline-overlay"></div>
+      <div id="timeline-hover-info"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div id="context-menu">
+  <div class="menu-item" onclick="addPointAtContextPos()">在此添加记录点</div>
+  <div class="menu-item" id="ctx-delete" style="display:none" onclick="deleteSelectedFromContext()">删除此点</div>
+</div>
+
+<!-- Train import modal -->
+<div id="train-import-overlay" class="modal-overlay" style="display:none;" onclick="closeTrainImportModal()">
+  <div class="modal wide" onclick="event.stopPropagation()">
+    <h3>按车次导入 — 从车次时刻表生成轨迹</h3>
+    <div class="modal-tabs">
+      <div class="modal-tab active" data-tab="schedule" onclick="switchTrainImportTab('schedule')">上传 schedule JSON</div>
+      <div class="modal-tab" data-tab="paste" onclick="switchTrainImportTab('paste')">粘贴 JSON 内容</div>
+    </div>
+
+    <!-- TAB: schedule file -->
+    <div id="train-tab-schedule">
+      <div class="help-tip">
+        前端版本走<b>站间直连 + 时刻表分段插值</b>，路径不贴合真实铁路。<br>
+        ① 生成 schedule JSON：<code>cd tools/railway &amp;&amp; uv run python train2kml.py G1 2025-01-15 --schedule-only -o output/G1.json</code><br>
+        ② 选择该 JSON 文件 → 调整下方参数 → 点击"导入"。<br>
+        如需路径吸附真实铁路线，请改用 <code>--snap -o out.kml</code> 生成 KML，再用左上角"加载 KML"导入。
+      </div>
+      <div class="form-row">
+        <label>选择 schedule JSON 文件</label>
+        <input type="file" id="train-schedule-file" accept=".json,application/json" onchange="onTrainScheduleFileSelected(event)">
+      </div>
+      <div class="form-row" id="train-schedule-summary" style="display:none;">
+        <label>已加载</label>
+        <div id="train-schedule-summary-text" style="font-size:12px;color:var(--text);background:var(--bg);padding:8px;border-radius:3px;border:1px solid var(--border);"></div>
+      </div>
+    </div>
+
+    <!-- TAB: paste -->
+    <div id="train-tab-paste" style="display:none;">
+      <div class="help-tip">
+        粘贴由 <code>schedule_fetcher.py</code> / <code>train2kml.py --schedule-only</code> 输出的 JSON。<br>
+        必须字段：<code>depart_date</code>（YYYY-MM-DD）+ <code>stations[]</code>，每站含
+        <code>name</code>、<code>arrive</code>（HH:MM，起点站为 null）、<code>start</code>（HH:MM，终点站为 null）、<code>day</code>（跨日数，默认 0）、<code>lon</code>、<code>lat</code>。
+        别名 <code>arrive_time</code> / <code>depart_time</code> / <code>day_diff</code> 也可识别。
+      </div>
+      <div class="form-row">
+        <label>schedule JSON 内容</label>
+        <textarea id="train-schedule-text" placeholder='{"train_code":"G1","depart_date":"2025-01-15","stations":[{"name":"北京南","arrive":null,"start":"09:00","day":0,"lon":116.378,"lat":39.865},{"name":"上海虹桥","arrive":"13:28","start":null,"day":0,"lon":121.319,"lat":31.194}]}'></textarea>
+      </div>
+    </div>
+
+    <hr style="border:0;border-top:1px solid var(--border);margin:14px 0 10px;">
+
+    <!-- 公共选项 -->
+    <div class="form-row">
+      <div class="row-inline">
+        <div>
+          <label>每段插值密度 (点/100km)</label>
+          <input type="number" id="train-density" value="50" min="2" max="500" step="1">
+        </div>
+        <div>
+          <label>停站采样</label>
+          <select id="train-dwell-mode">
+            <option value="endpoints">仅停靠两端（默认）</option>
+            <option value="every-30s">每 30 秒一个点</option>
+            <option value="none">不生成停站点</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <label class="checkbox-row">
+        <input type="checkbox" id="train-replace-current" checked>
+        <span>导入后替换当前轨迹（取消则追加到当前轨迹之后）</span>
+      </label>
+    </div>
+
+    <div class="modal-actions">
+      <span class="spacer"></span>
+      <button class="btn" onclick="closeTrainImportModal()">取消</button>
+      <button class="btn primary" onclick="confirmTrainImport()">导入</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script type="text/javascript">
+window._AMapSecurityConfig = { securityJsCode: "50c122de5357aa337734ae41641b5582" };
+</script>
+<script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key=75a2c1443be6063842797a143f247ef4"></script>
+<script src="https://cdn.jsdelivr.net/npm/exif-js@2.3.0/exif.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/exif-heic-js/exif-heic-js/exif-heic.min.js"></script>
+
+<script>
+// ===================== STATE =====================
+let trackPoints = [];   // {time, lon, lat, alt, source?}
+let map = null;
+let polyline = null;
+let pointsCanvas = null;  // AMap.CustomLayer for drawing track point dots
+let selectedMarker = null;   // single draggable marker for selected point
+let selectedIndex = -1;
+let contextLngLat = null;
+let timelineMode = 'index'; // 'index' or 'time'
+let exportRangeStart = -1;
+let exportRangeEnd = -1;
+let gcjCache = [];  // pre-computed GCJ02 coords parallel to trackPoints
+
+// ===================== UNDO / REDO =====================
+const undoStack = [];
+const redoStack = [];
+const MAX_UNDO = 50;
+
+function clonePoints(pts) {
+  return pts.map(p => ({...p, time: p.time ? new Date(p.time.getTime()) : null}));
+}
+
+function pushUndo() {
+  undoStack.push({points: clonePoints(trackPoints), sel: selectedIndex});
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+  updateUndoButtons();
+}
+
+function undo() {
+  if (!undoStack.length) return;
+  redoStack.push({points: clonePoints(trackPoints), sel: selectedIndex});
+  const state = undoStack.pop();
+  trackPoints = state.points;
+  selectedIndex = state.sel;
+  afterTrackChanged();
+  if (selectedIndex >= 0 && selectedIndex < trackPoints.length) showPointDetail(selectedIndex);
+  updateUndoButtons();
+  toast('已撤销', 'info', 1500);
+}
+
+function redo() {
+  if (!redoStack.length) return;
+  undoStack.push({points: clonePoints(trackPoints), sel: selectedIndex});
+  const state = redoStack.pop();
+  trackPoints = state.points;
+  selectedIndex = state.sel;
+  afterTrackChanged();
+  if (selectedIndex >= 0 && selectedIndex < trackPoints.length) showPointDetail(selectedIndex);
+  updateUndoButtons();
+  toast('已恢复', 'info', 1500);
+}
+
+function updateUndoButtons() {
+  const bu = document.getElementById('btn-undo');
+  const br = document.getElementById('btn-redo');
+  if (bu) bu.disabled = !undoStack.length;
+  if (br) br.disabled = !redoStack.length;
+}
+
+// ===================== COORD TRANSFORM =====================
+const PI = Math.PI, A_AXIS = 6378245.0, EE = 0.00669342162296594323;
+function _tLat(g,t){let r=-100+2*g+3*t+.2*t*t+.1*g*t+.2*Math.sqrt(Math.abs(g));r+=(20*Math.sin(6*g*PI)+20*Math.sin(2*g*PI))*2/3;r+=(20*Math.sin(t*PI)+40*Math.sin(t/3*PI))*2/3;r+=(160*Math.sin(t/12*PI)+320*Math.sin(t*PI/30))*2/3;return r;}
+function _tLng(g,t){let r=300+g+2*t+.1*g*g+.1*g*t+.1*Math.sqrt(Math.abs(g));r+=(20*Math.sin(6*g*PI)+20*Math.sin(2*g*PI))*2/3;r+=(20*Math.sin(g*PI)+40*Math.sin(g/3*PI))*2/3;r+=(150*Math.sin(g/12*PI)+300*Math.sin(g/30*PI))*2/3;return r;}
+function _ooc(a,b){return a<72.004||a>137.8347||b<0.8293||b>55.8271;}
+function wgs2gcj(ln,lt){if(_ooc(ln,lt))return[ln,lt];let dl=_tLat(ln-105,lt-35),dg=_tLng(ln-105,lt-35);const r=lt/180*PI;let m=Math.sin(r);m=1-EE*m*m;const s=Math.sqrt(m);dl=dl*180/((A_AXIS*(1-EE))/(m*s)*PI);dg=dg*180/(A_AXIS/s*Math.cos(r)*PI);return[ln+dg,lt+dl];}
+function gcj2wgs(ln,lt){if(_ooc(ln,lt))return[ln,lt];let dl=_tLat(ln-105,lt-35),dg=_tLng(ln-105,lt-35);const r=lt/180*PI;let m=Math.sin(r);m=1-EE*m*m;const s=Math.sqrt(m);dl=dl*180/((A_AXIS*(1-EE))/(m*s)*PI);dg=dg*180/(A_AXIS/s*Math.cos(r)*PI);return[ln-dg,lt-dl];}
+
+function rebuildGcjCache() {
+  gcjCache = trackPoints.map(p => wgs2gcj(p.lon, p.lat));
+}
+
+// ===================== TOAST =====================
+function toast(msg, type='info', dur=3000) {
+  const c=document.getElementById('toast-container'), el=document.createElement('div');
+  el.className='toast '+type; el.textContent=msg; c.appendChild(el);
+  setTimeout(()=>{el.style.opacity='0';setTimeout(()=>el.remove(),200);},dur);
+}
+
+// ===================== MAP INIT =====================
+function initMap() {
+  map = new AMap.Map('map', {
+    zoom: 5, center: [104, 35],
+    mapStyle: 'amap://styles/dark',
+    features: ['bg', 'road', 'building', 'point'],
+  });
+  map.on('rightclick', e => {
+    if (!trackPoints.length) return;
+    contextLngLat = e.lnglat;
+    showContextMenu(e.originEvent.clientX, e.originEvent.clientY, false);
+  });
+  document.addEventListener('click', () => { document.getElementById('context-menu').style.display='none'; });
+
+  // Click on map background to find nearest point
+  map.on('click', e => {
+    if (!trackPoints.length) return;
+    const idx = findNearestPointOnScreen(e.pixel);
+    if (idx >= 0) selectPoint(idx);
+  });
+}
+
+function findNearestPointOnScreen(pixel) {
+  let bestIdx = -1, bestDist = 20; // 20px threshold
+  for (let i = 0; i < gcjCache.length; i++) {
+    const px = map.lngLatToContainer(new AMap.LngLat(gcjCache[i][0], gcjCache[i][1]));
+    if (!px) continue;
+    const d = Math.hypot(px.x - pixel.x, px.y - pixel.y);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
+function showContextMenu(x, y, onMarker=false) {
+  const menu=document.getElementById('context-menu');
+  menu.style.display='block';
+  document.getElementById('ctx-delete').style.display=onMarker?'':'none';
+  const mr=menu.getBoundingClientRect();
+  menu.style.left=Math.min(x,window.innerWidth-mr.width-4)+'px';
+  menu.style.top=Math.min(y,window.innerHeight-mr.height-4)+'px';
+}
+
+// ===================== KML PARSING =====================
+function parseKML(xmlText) {
+  const parser=new DOMParser(), doc=parser.parseFromString(xmlText,'text/xml');
+  const points=[], ns='http://www.opengis.net/kml/2.2', gx='http://www.google.com/kml/ext/2.2';
+  let tracks=doc.getElementsByTagNameNS(gx,'Track');
+  if(!tracks.length) tracks=doc.querySelectorAll('Track');
+  if(tracks.length>0){
+    for(const track of tracks){
+      const whens=track.getElementsByTagNameNS(ns,'when');
+      const coords=track.getElementsByTagNameNS(gx,'coord');
+      const n=Math.min(whens.length,coords.length);
+      for(let i=0;i<n;i++){
+        const ts=whens[i].textContent.trim(), cp=coords[i].textContent.trim().split(/\s+/);
+        if(cp.length>=3){const t=parseISOTime(ts);if(t)points.push({time:t,lon:+cp[0],lat:+cp[1],alt:+cp[2]});}
+      }
+    }
+  }
+  if(!points.length){
+    const pms=doc.getElementsByTagNameNS(ns,'Placemark');
+    for(const pm of pms){
+      const ce=pm.getElementsByTagNameNS(ns,'coordinates');
+      if(ce.length){
+        for(const ln of ce[0].textContent.trim().split(/\s+/)){
+          const p=ln.split(',');
+          if(p.length>=3)points.push({time:null,lon:+p[0],lat:+p[1],alt:+p[2]});
+        }
+      }
+    }
+  }
+  points.sort((a,b)=>{if(!a.time||!b.time)return 0;return a.time-b.time;});
+  return points;
+}
+function parseISOTime(s){if(!s)return null;try{const d=new Date(s.replace('Z','+00:00'));return isNaN(d)?null:d;}catch{return null;}}
+
+// ===================== LOAD KML =====================
+function handleLoadKML(event) {
+  const file=event.target.files[0]; if(!file)return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const pts=parseKML(e.target.result);
+      if(!pts.length){toast('未在KML中找到有效轨迹数据','error');return;}
+      pushUndo();
+      trackPoints=pts;
+      afterTrackChanged();
+      enableButtons();
+      toast(`成功加载 ${pts.length} 个轨迹点`,'success');
+      document.getElementById('status-text').textContent=`${file.name} — ${pts.length} 个点`;
+    }catch(err){toast('解析KML文件失败: '+err.message,'error');console.error(err);}
+  };
+  reader.readAsText(file); event.target.value='';
+}
+
+function enableButtons() {
+  ['btn-export-kml','btn-export-gpx','btn-export-partial'].forEach(id=>document.getElementById(id).disabled=false);
+}
+
+// ===================== TRAIN IMPORT (按车次导入) =====================
+let _trainScheduleLoaded = null; // 已加载的 schedule 对象（来自文件 tab）
+
+function showTrainImportModal(){
+  document.getElementById('train-import-overlay').style.display='flex';
+  switchTrainImportTab('schedule');
+  _trainScheduleLoaded = null;
+  document.getElementById('train-schedule-summary').style.display='none';
+  document.getElementById('train-schedule-file').value='';
+  document.getElementById('train-schedule-text').value='';
+}
+function closeTrainImportModal(){
+  document.getElementById('train-import-overlay').style.display='none';
+}
+function switchTrainImportTab(name){
+  document.querySelectorAll('#train-import-overlay .modal-tab').forEach(t=>{
+    t.classList.toggle('active', t.dataset.tab===name);
+  });
+  document.getElementById('train-tab-schedule').style.display = (name==='schedule') ? '' : 'none';
+  document.getElementById('train-tab-paste').style.display = (name==='paste') ? '' : 'none';
+}
+
+function onTrainScheduleFileSelected(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try{
+      const sched = _parseScheduleJsonText(e.target.result);
+      _trainScheduleLoaded = sched;
+      const sum = document.getElementById('train-schedule-summary-text');
+      const first = sched.stations[0], last = sched.stations[sched.stations.length-1];
+      const withCoords = sched.stations.filter(s=>Number.isFinite(s.lon)&&Number.isFinite(s.lat)).length;
+      sum.innerHTML =
+        `车次：<b>${sched.train_code||'-'}</b>　日期：<b>${sched.depart_date||'-'}</b><br>` +
+        `站点数：<b>${sched.stations.length}</b>（含坐标 ${withCoords} 个）<br>` +
+        `${first.name||first.station_name||'-'} → ${last.name||last.station_name||'-'}`;
+      document.getElementById('train-schedule-summary').style.display='';
+    }catch(err){
+      _trainScheduleLoaded = null;
+      document.getElementById('train-schedule-summary').style.display='none';
+      toast('schedule JSON 解析失败：' + err.message, 'error');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function confirmTrainImport(){
+  let sched = null;
+  const activeTab = document.querySelector('#train-import-overlay .modal-tab.active').dataset.tab;
+  try{
+    if(activeTab === 'schedule'){
+      if(!_trainScheduleLoaded){ toast('请先选择 schedule JSON 文件','warn'); return; }
+      sched = _trainScheduleLoaded;
+    }else{
+      const text = document.getElementById('train-schedule-text').value.trim();
+      if(!text){ toast('请粘贴 schedule JSON 内容','warn'); return; }
+      sched = _parseScheduleJsonText(text);
+    }
+  }catch(err){
+    toast('schedule JSON 解析失败：' + err.message, 'error');
+    return;
+  }
+
+  const density = Math.max(2, Math.min(500, parseInt(document.getElementById('train-density').value || '50', 10)));
+  const dwellMode = document.getElementById('train-dwell-mode').value;
+  const replaceCurrent = document.getElementById('train-replace-current').checked;
+
+  let pts;
+  try{
+    pts = _buildTrackPointsFromSchedule(sched, { density, dwellMode });
+  }catch(err){
+    toast('生成轨迹失败：' + err.message, 'error');
+    console.error(err);
+    return;
+  }
+  if(!pts || !pts.length){
+    toast('未生成任何轨迹点（请检查站点是否包含坐标）','warn');
+    return;
+  }
+
+  pushUndo();
+  if(replaceCurrent || !trackPoints.length){
+    trackPoints = pts;
+  }else{
+    trackPoints = trackPoints.concat(pts);
+    trackPoints.sort((a,b)=>{
+      if(!a.time||!b.time) return 0;
+      return a.time - b.time;
+    });
+  }
+  afterTrackChanged();
+  enableButtons();
+
+  const first = sched.stations[0], last = sched.stations[sched.stations.length-1];
+  const label = `${sched.train_code||'车次'} ${sched.depart_date||''} ${first.name||first.station_name||''}→${last.name||last.station_name||''}`;
+  document.getElementById('status-text').textContent = `${label} — ${pts.length} 个点`;
+  toast(`已导入 ${pts.length} 个轨迹点（${label}）`, 'success');
+  closeTrainImportModal();
+}
+
+// 解析 schedule JSON 文本为标准对象，并做基本校验
+// 兼容字段命名：
+//   - 站名: name | station_name
+//   - 到达时间: arrive | arrive_time     (HH:MM, 起点站为 null)
+//   - 出发时间: start  | depart_time     (HH:MM, 终点站为 null)
+//   - 跨日:     day    | day_diff        (整数, 默认 0)
+function _parseScheduleJsonText(text){
+  let obj;
+  try { obj = JSON.parse(text); }
+  catch(e){ throw new Error('JSON 格式错误：' + e.message); }
+  if(!obj || typeof obj !== 'object') throw new Error('JSON 根必须是对象');
+  if(!obj.depart_date) throw new Error('缺少 depart_date 字段（如 "2025-01-15"）');
+  const stations = obj.stations;
+  if(!Array.isArray(stations) || stations.length < 2){
+    throw new Error('stations 字段缺失或不足 2 个站');
+  }
+  for(const s of stations){
+    if(!s.name && s.station_name) s.name = s.station_name;
+    s.arrive_time = s.arrive_time ?? s.arrive ?? null;
+    s.depart_time = s.depart_time ?? s.start ?? null;
+    const rawDay = s.day_diff ?? s.day ?? 0;
+    s.day_diff = (typeof rawDay === 'number') ? rawDay : (parseInt(rawDay, 10) || 0);
+    if(s.lon != null) s.lon = Number(s.lon);
+    if(s.lat != null) s.lat = Number(s.lat);
+  }
+  return obj;
+}
+
+// 把 "HH:MM" + 出发日期 + day_diff 转为 北京时间(UTC+8) 对应的 Date 对象
+function _scheduleTimeToDate(departDate, dayDiff, hhmm){
+  if(!hhmm) return null;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if(!m) return null;
+  const h = parseInt(m[1],10), min = parseInt(m[2],10);
+  // departDate: 'YYYY-MM-DD'
+  const dm = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec((departDate||'').trim());
+  if(!dm) throw new Error('depart_date 必须形如 2025-01-15');
+  const y=+dm[1], mo=+dm[2], d=+dm[3] + (dayDiff||0);
+  // 北京时间 09:00 == UTC 01:00
+  const t = Date.UTC(y, mo-1, d, h-8, min, 0);
+  return new Date(t);
+}
+
+// 计算 Haversine 距离（米），输入为 WGS84 经纬度
+function _haversineMeters(lon1, lat1, lon2, lat2){
+  const R = 6371008.8;
+  const toRad = x => x * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+// 站点的"到达时间戳"和"出发时间戳"
+function _stationAnchor(s, departDate){
+  const arr = _scheduleTimeToDate(departDate, s.day_diff, s.arrive_time);
+  const dep = _scheduleTimeToDate(departDate, s.day_diff, s.depart_time);
+  // 起始站只有 depart：arr = dep
+  // 终点站只有 arrive：dep = arr
+  return { arrive: arr || dep, depart: dep || arr };
+}
+
+// 主算法：站间直连 + 时刻表分段插值
+function _buildTrackPointsFromSchedule(schedule, opts){
+  const departDate = schedule.depart_date;
+  const stations = schedule.stations.filter(s => Number.isFinite(s.lon) && Number.isFinite(s.lat));
+  if(stations.length < 2) throw new Error('至少需要 2 个含坐标的站点');
+
+  const density = opts.density;     // 点/100km
+  const dwellMode = opts.dwellMode; // 'endpoints' | 'every-30s' | 'none'
+  const points = [];
+
+  // 给所有站点计算 anchor 时间
+  const anchors = stations.map(s => _stationAnchor(s, departDate));
+  // 校验时间链：必须有 arrive/depart 形成的有序时间
+  for(let i=0;i<anchors.length;i++){
+    if(!anchors[i].arrive || !anchors[i].depart){
+      throw new Error(`第 ${i+1} 站 "${stations[i].name||''}" 缺少有效时间`);
+    }
+  }
+
+  for(let i=0;i<stations.length;i++){
+    const s = stations[i];
+    const a = anchors[i];
+
+    // 1) 写入"停站点"
+    if(dwellMode === 'endpoints'){
+      // arrive 与 depart 各一个；起点/终点同一时刻只写一次
+      if(a.arrive && a.depart && a.arrive.getTime() !== a.depart.getTime()){
+        points.push({ time: a.arrive, lon: s.lon, lat: s.lat, alt: 0, _stationName: s.name });
+        points.push({ time: a.depart, lon: s.lon, lat: s.lat, alt: 0, _stationName: s.name });
+      }else{
+        points.push({ time: a.depart || a.arrive, lon: s.lon, lat: s.lat, alt: 0, _stationName: s.name });
+      }
+    }else if(dwellMode === 'every-30s'){
+      const t0 = a.arrive.getTime(), t1 = a.depart.getTime();
+      const step = 30 * 1000;
+      if(t1 > t0){
+        for(let t=t0; t<=t1; t+=step){
+          points.push({ time: new Date(t), lon: s.lon, lat: s.lat, alt: 0, _stationName: s.name });
+        }
+        if(((t1-t0) % step) !== 0){
+          points.push({ time: new Date(t1), lon: s.lon, lat: s.lat, alt: 0, _stationName: s.name });
+        }
+      }else{
+        points.push({ time: new Date(t0), lon: s.lon, lat: s.lat, alt: 0, _stationName: s.name });
+      }
+    }else{ // 'none'
+      points.push({ time: a.depart || a.arrive, lon: s.lon, lat: s.lat, alt: 0, _stationName: s.name });
+    }
+
+    // 2) 段间插值（station[i] -> station[i+1]）
+    if(i < stations.length - 1){
+      const sNext = stations[i+1];
+      const aNext = anchors[i+1];
+      const tStart = a.depart.getTime();   // 本站出发
+      const tEnd   = aNext.arrive.getTime(); // 下一站到达
+      if(tEnd <= tStart){
+        // 时间倒序或为零，跳过插值；只依赖站点本身
+        continue;
+      }
+      const distM = _haversineMeters(s.lon, s.lat, sNext.lon, sNext.lat);
+      const distKm = distM / 1000;
+      // 至少 2 个内插点（防止点太稀）；每 100km 取 density 个
+      const n = Math.max(2, Math.ceil(distKm / 100 * density));
+      // n 表示中间插值点数；不含两端（两端由站点本身负责）
+      for(let k=1; k<=n; k++){
+        const f = k / (n + 1);
+        const lon = s.lon + (sNext.lon - s.lon) * f;
+        const lat = s.lat + (sNext.lat - s.lat) * f;
+        const t   = tStart + (tEnd - tStart) * f;
+        points.push({ time: new Date(t), lon, lat, alt: 0 });
+      }
+    }
+  }
+
+  // 按时间排序，并去掉相邻完全相同的点
+  points.sort((a,b) => a.time - b.time);
+  const dedup = [];
+  for(const p of points){
+    const last = dedup[dedup.length-1];
+    if(last && last.time.getTime() === p.time.getTime()
+       && Math.abs(last.lon - p.lon) < 1e-9
+       && Math.abs(last.lat - p.lat) < 1e-9) continue;
+    dedup.push(p);
+  }
+  // 去掉内部 _stationName 字段（trackPoints 标准字段为 time/lon/lat/alt）
+  return dedup.map(p => ({ time: p.time, lon: p.lon, lat: p.lat, alt: p.alt || 0 }));
+}
+
+// ===================== RENDER (PERFORMANCE-OPTIMIZED) =====================
+// Instead of creating thousands of AMap.Marker objects, we only use:
+// 1) A single AMap.Polyline for the track
+// 2) A single draggable AMap.Marker for the currently selected point
+// 3) Map click handler that finds nearest point by pixel distance
+
+function afterTrackChanged() {
+  rebuildGcjCache();
+  renderPolyline();
+  renderPointDots();
+  updateSelectedMarker();
+  drawTimeline();
+  updatePointList();
+  updateImportedList();
+  updateExportRangeVisuals();
+}
+
+function renderPolyline() {
+  if (polyline) { map.remove(polyline); polyline = null; }
+  if (!trackPoints.length) return;
+  const path = gcjCache.map(c => new AMap.LngLat(c[0], c[1]));
+  polyline = new AMap.Polyline({
+    path, strokeColor: '#0ea5e9', strokeWeight: 3,
+    strokeOpacity: 0.8, lineJoin: 'round', showDir: true,
+  });
+  map.add(polyline);
+  map.setFitView([polyline], false, [40, 40, 40, 40]);
+}
+
+let _dotCanvas = null; // reusable canvas element
+function renderPointDots() {
+  if (pointsCanvas) { map.remove(pointsCanvas); pointsCanvas = null; }
+  if (!trackPoints.length) {
+    if (_dotCanvas && _dotCanvas.parentNode) _dotCanvas.parentNode.removeChild(_dotCanvas);
+    return;
+  }
+  if (!_dotCanvas) {
+    _dotCanvas = document.createElement('canvas');
+    _dotCanvas.style.pointerEvents = 'none';
+  }
+  _dotCanvas.width = map.getContainer().clientWidth;
+  _dotCanvas.height = map.getContainer().clientHeight;
+  pointsCanvas = new AMap.CustomLayer(_dotCanvas, {
+    render() {
+      const w = map.getContainer().clientWidth;
+      const h = map.getContainer().clientHeight;
+      if (_dotCanvas.width !== w || _dotCanvas.height !== h) { _dotCanvas.width = w; _dotCanvas.height = h; }
+      const ctx = _dotCanvas.getContext('2d');
+      ctx.clearRect(0, 0, w, h);
+      const r = 3;
+      ctx.fillStyle = 'rgba(14,165,233,0.85)';
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < gcjCache.length; i++) {
+        const px = map.lngLatToContainer(new AMap.LngLat(gcjCache[i][0], gcjCache[i][1]));
+        if (!px || px.x < -r || px.y < -r || px.x > w + r || px.y > h + r) continue;
+        ctx.beginPath();
+        ctx.arc(px.x, px.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      if (selectedIndex >= 0 && selectedIndex < gcjCache.length) {
+        const sp = map.lngLatToContainer(new AMap.LngLat(gcjCache[selectedIndex][0], gcjCache[selectedIndex][1]));
+        if (sp) {
+          ctx.fillStyle = '#e94560';
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+    },
+    zIndex: 120,
+    zooms: [2, 30],
+  });
+  map.add(pointsCanvas);
+}
+
+function updateSelectedMarker() {
+  if (selectedMarker) { map.remove(selectedMarker); selectedMarker = null; }
+  if (selectedIndex < 0 || selectedIndex >= trackPoints.length) return;
+  const c = gcjCache[selectedIndex];
+  selectedMarker = new AMap.Marker({
+    position: new AMap.LngLat(c[0], c[1]),
+    content: '<div style="width:14px;height:14px;border-radius:50%;background:#e94560;border:2px solid #fff;box-shadow:0 0 8px #e94560;cursor:grab;"></div>',
+    offset: new AMap.Pixel(-7, -7),
+    draggable: true, zIndex: 999,
+  });
+  selectedMarker.on('dragend', ev => {
+    pushUndo();
+    const gl=ev.lnglat.getLng(), gt=ev.lnglat.getLat();
+    const [wl,wt]=gcj2wgs(gl,gt);
+    trackPoints[selectedIndex].lon=wl; trackPoints[selectedIndex].lat=wt;
+    gcjCache[selectedIndex]=wgs2gcj(wl,wt);
+    // Update polyline path at this index
+    const path=polyline.getPath();
+    path[selectedIndex]=new AMap.LngLat(gcjCache[selectedIndex][0],gcjCache[selectedIndex][1]);
+    polyline.setPath(path);
+    showPointDetail(selectedIndex);
+    toast(`点 #${selectedIndex} 坐标已更新`,'info');
+  });
+  selectedMarker.on('rightclick', ev => {
+    contextLngLat=ev.lnglat;
+    showContextMenu(ev.originEvent.clientX, ev.originEvent.clientY, true);
+  });
+  map.add(selectedMarker);
+}
+
+// ===================== TIMELINE =====================
+function setTimelineMode(mode) {
+  timelineMode=mode;
+  document.getElementById('btn-tl-index').style.borderColor = mode==='index'?'var(--accent2)':'var(--border)';
+  document.getElementById('btn-tl-index').style.color = mode==='index'?'#fff':'var(--text)';
+  document.getElementById('btn-tl-time').style.borderColor = mode==='time'?'var(--accent2)':'var(--border)';
+  document.getElementById('btn-tl-time').style.color = mode==='time'?'#fff':'var(--text)';
+  drawTimeline();
+  updateTimelineCursor();
+}
+
+function idxToX(i, w) {
+  if (timelineMode==='index' || trackPoints.length<2) {
+    return trackPoints.length<2 ? w/2 : (i/(trackPoints.length-1))*w;
+  }
+  // Time mode
+  const t0=trackPoints[0].time, t1=trackPoints[trackPoints.length-1].time;
+  if(!t0||!t1||t1<=t0) return (i/(trackPoints.length-1))*w;
+  const pt=trackPoints[i].time;
+  if(!pt) return (i/(trackPoints.length-1))*w;
+  return ((pt-t0)/(t1-t0))*w;
+}
+
+function xToIdx(xPx) {
+  const container=document.getElementById('timeline-container');
+  const w=container.clientWidth;
+  if(!trackPoints.length) return -1;
+  if(trackPoints.length===1) return 0;
+  const ratio=Math.max(0,Math.min(1,xPx/w));
+  if(timelineMode==='index'){
+    return Math.round(ratio*(trackPoints.length-1));
+  }
+  // Time mode: find nearest by time
+  const t0=trackPoints[0].time, t1=trackPoints[trackPoints.length-1].time;
+  if(!t0||!t1||t1<=t0) return Math.round(ratio*(trackPoints.length-1));
+  const targetT=t0.getTime()+ratio*(t1.getTime()-t0.getTime());
+  let best=0, bestD=Infinity;
+  for(let i=0;i<trackPoints.length;i++){
+    const d=Math.abs((trackPoints[i].time||t0).getTime()-targetT);
+    if(d<bestD){bestD=d;best=i;}
+  }
+  return best;
+}
+
+function drawTimeline() {
+  const canvas=document.getElementById('timeline-canvas');
+  const cont=document.getElementById('timeline-container');
+  const w=cont.clientWidth, h=cont.clientHeight;
+  if(!w||!h) return;
+  const dpr=window.devicePixelRatio||1;
+  canvas.width=w*dpr; canvas.height=h*dpr;
+  canvas.style.width=w+'px'; canvas.style.height=h+'px';
+  const ctx=canvas.getContext('2d');
+  ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,w,h);
+  if(trackPoints.length<2) return;
+
+  const alts=trackPoints.map(p=>p.alt);
+  const minA=Math.min(...alts), maxA=Math.max(...alts), rangeA=maxA-minA||1;
+  const padTop=14, padBot=14;
+  const graphH=h-padTop-padBot;
+
+  // Elevation fill
+  ctx.beginPath(); ctx.moveTo(idxToX(0,w), h-padBot);
+  for(let i=0;i<trackPoints.length;i++){
+    const x=idxToX(i,w), y=padTop+(1-(alts[i]-minA)/rangeA)*graphH;
+    ctx.lineTo(x,y);
+  }
+  ctx.lineTo(idxToX(trackPoints.length-1,w), h-padBot);
+  ctx.closePath();
+  const grad=ctx.createLinearGradient(0,0,0,h);
+  grad.addColorStop(0,'rgba(14,165,233,0.4)'); grad.addColorStop(1,'rgba(14,165,233,0.02)');
+  ctx.fillStyle=grad; ctx.fill();
+
+  // Elevation line
+  ctx.beginPath();
+  for(let i=0;i<trackPoints.length;i++){
+    const x=idxToX(i,w), y=padTop+(1-(alts[i]-minA)/rangeA)*graphH;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle='#0ea5e9'; ctx.lineWidth=1.5; ctx.stroke();
+
+  // Axis ticks
+  ctx.fillStyle='#8892a4'; ctx.font='9px sans-serif'; ctx.textBaseline='bottom';
+  const tickCount=Math.min(10, Math.floor(w/80));
+  for(let t=0;t<=tickCount;t++){
+    const ratio=t/tickCount;
+    const x=ratio*w;
+    let label;
+    if(timelineMode==='index'){
+      const idx=Math.round(ratio*(trackPoints.length-1));
+      label='#'+idx;
+    } else {
+      const t0=trackPoints[0].time, t1=trackPoints[trackPoints.length-1].time;
+      if(t0&&t1){
+        const d=new Date(t0.getTime()+ratio*(t1.getTime()-t0.getTime()));
+        label=fmtHMS(d);
+      } else {
+        label='#'+Math.round(ratio*(trackPoints.length-1));
+      }
+    }
+    ctx.textAlign= t===0?'left': t===tickCount?'right':'center';
+    ctx.fillText(label, x, h-1);
+    // tick line
+    ctx.beginPath(); ctx.moveTo(x, h-padBot); ctx.lineTo(x, h-padBot+3);
+    ctx.strokeStyle='#555'; ctx.lineWidth=1; ctx.stroke();
+  }
+
+  // Top-left alt range
+  ctx.fillStyle='#666'; ctx.font='9px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='top';
+  ctx.fillText(`${minA.toFixed(0)}m ~ ${maxA.toFixed(0)}m`, 4, 1);
+}
+
+function updateTimelineCursor() {
+  const cursor=document.getElementById('timeline-cursor');
+  if(selectedIndex<0||!trackPoints.length){cursor.style.left='0px';return;}
+  const w=document.getElementById('timeline-container').clientWidth;
+  cursor.style.left=idxToX(selectedIndex,w)+'px';
+}
+
+// Timeline interaction
+(function(){
+  const overlay=document.getElementById('timeline-overlay');
+  let dragging=false;
+  function onMove(e){
+    const rect=overlay.getBoundingClientRect();
+    const x=e.clientX-rect.left;
+    const idx=xToIdx(x);
+    if(idx>=0) selectPoint(idx, false);
+  }
+  overlay.addEventListener('mousedown', e=>{dragging=true; onMove(e);});
+  window.addEventListener('mousemove', e=>{if(dragging)onMove(e);});
+  window.addEventListener('mouseup', ()=>{dragging=false;});
+  overlay.addEventListener('click', e=>{
+    const rect=overlay.getBoundingClientRect();
+    const idx=xToIdx(e.clientX-rect.left);
+    if(idx>=0) selectPoint(idx, true);
+  });
+})();
+
+// ===================== EXPORT RANGE VISUALS ON TIMELINE =====================
+function updateExportRangeVisuals() {
+  const w=document.getElementById('timeline-container').clientWidth;
+  const ms=document.getElementById('tl-marker-start');
+  const me=document.getElementById('tl-marker-end');
+  const fill=document.getElementById('tl-range-fill');
+
+  if(exportRangeStart>=0 && exportRangeStart<trackPoints.length){
+    const x=idxToX(exportRangeStart, w);
+    ms.style.display=''; ms.style.left=x+'px';
+  } else { ms.style.display='none'; }
+
+  if(exportRangeEnd>=0 && exportRangeEnd<trackPoints.length){
+    const x=idxToX(exportRangeEnd, w);
+    me.style.display=''; me.style.left=x+'px';
+  } else { me.style.display='none'; }
+
+  if(exportRangeStart>=0 && exportRangeEnd>=0 && exportRangeStart<trackPoints.length && exportRangeEnd<trackPoints.length){
+    const x1=idxToX(Math.min(exportRangeStart,exportRangeEnd),w);
+    const x2=idxToX(Math.max(exportRangeStart,exportRangeEnd),w);
+    fill.style.display=''; fill.style.left=x1+'px'; fill.style.width=(x2-x1)+'px';
+  } else { fill.style.display='none'; }
+
+  // Update export panel fields
+  if(exportRangeStart>=0) document.getElementById('export-start-idx').value=exportRangeStart;
+  if(exportRangeEnd>=0) document.getElementById('export-end-idx').value=exportRangeEnd;
+  if(exportRangeStart>=0 && trackPoints[exportRangeStart]?.time)
+    document.getElementById('export-start-time').value=toLocalISO(trackPoints[exportRangeStart].time);
+  if(exportRangeEnd>=0 && trackPoints[exportRangeEnd]?.time)
+    document.getElementById('export-end-time').value=toLocalISO(trackPoints[exportRangeEnd].time);
+
+  // Info
+  updateExportRangeInfo();
+
+  // Highlight polyline segment? We recolor the main polyline via a second overlay polyline
+  updateExportRangePolyline();
+}
+
+let exportPolyline = null;
+function updateExportRangePolyline() {
+  if(exportPolyline){map.remove(exportPolyline);exportPolyline=null;}
+  if(exportRangeStart<0||exportRangeEnd<0) return;
+  const s=Math.min(exportRangeStart,exportRangeEnd), e=Math.max(exportRangeStart,exportRangeEnd);
+  if(s>=trackPoints.length||e>=trackPoints.length) return;
+  const path=[];
+  for(let i=s;i<=e;i++) path.push(new AMap.LngLat(gcjCache[i][0],gcjCache[i][1]));
+  exportPolyline=new AMap.Polyline({
+    path, strokeColor:'#a855f7', strokeWeight:4, strokeOpacity:0.7, lineJoin:'round', zIndex:50,
+  });
+  map.add(exportPolyline);
+}
+
+function markExportStart() {
+  if(selectedIndex<0){toast('请先选中一个点','warn');return;}
+  exportRangeStart=selectedIndex;
+  updateExportRangeVisuals();
+  toast(`导出起点设为 #${selectedIndex}`,'info');
+}
+function markExportEnd() {
+  if(selectedIndex<0){toast('请先选中一个点','warn');return;}
+  exportRangeEnd=selectedIndex;
+  updateExportRangeVisuals();
+  toast(`导出终点设为 #${selectedIndex}`,'info');
+}
+function clearExportRange() {
+  exportRangeStart=-1; exportRangeEnd=-1;
+  updateExportRangeVisuals();
+}
+
+function onExportRangeChanged() {
+  const mode=document.getElementById('export-mode').value;
+  if(mode==='point'){
+    exportRangeStart=parseInt(document.getElementById('export-start-idx').value)||0;
+    exportRangeEnd=parseInt(document.getElementById('export-end-idx').value)||0;
+  } else {
+    const s=new Date(document.getElementById('export-start-time').value);
+    const e=new Date(document.getElementById('export-end-time').value);
+    // Find nearest indices
+    exportRangeStart=findIdxByTime(s);
+    exportRangeEnd=findIdxByTime(e);
+  }
+  updateExportRangeVisuals();
+}
+
+function findIdxByTime(t) {
+  if(!trackPoints.length||isNaN(t)) return -1;
+  let best=0, bestD=Infinity;
+  for(let i=0;i<trackPoints.length;i++){
+    if(!trackPoints[i].time) continue;
+    const d=Math.abs(trackPoints[i].time-t);
+    if(d<bestD){bestD=d;best=i;}
+  }
+  return best;
+}
+
+function updateExportRangeInfo() {
+  const info=document.getElementById('export-range-info');
+  if(exportRangeStart<0||exportRangeEnd<0){info.textContent='未设置导出范围';return;}
+  const s=Math.min(exportRangeStart,exportRangeEnd), e=Math.max(exportRangeStart,exportRangeEnd);
+  const count=e-s+1;
+  info.textContent=`范围: #${s} → #${e} (${count} 个点)`;
+}
+
+// ===================== POINT SELECTION =====================
+function selectPoint(index, panTo=true) {
+  if(index<0||index>=trackPoints.length) return;
+  selectedIndex=index;
+  updateSelectedMarker();
+  if(pointsCanvas) pointsCanvas.render();
+  if(panTo){
+    const c=gcjCache[index];
+    map.panTo(new AMap.LngLat(c[0],c[1]));
+  }
+  updateTimelineCursor();
+  showPointDetail(index);
+  highlightListItem(index);
+  // Hover info
+  const info=document.getElementById('timeline-hover-info');
+  const p=trackPoints[index];
+  info.style.display='block';
+  info.textContent=`#${index}  ${p.time?fmtHMS(p.time):'--'}  海拔:${p.alt.toFixed(1)}m`;
+}
+
+function selectPrev() { if(selectedIndex>0) selectPoint(selectedIndex-1); }
+function selectNext() { if(selectedIndex<trackPoints.length-1) selectPoint(selectedIndex+1); }
+
+// ===================== POINT DETAIL =====================
+function showPointDetail(index) {
+  const p=trackPoints[index];
+  const srcLabel = p.source ? `<span style="color:var(--highlight);font-size:11px;">[${p.source}]</span>` : '';
+  const div=document.getElementById('tab-detail');
+  div.innerHTML=`
+    <div class="detail-group">
+      <label>序号 ${srcLabel}</label>
+      <input type="text" value="${index}" readonly style="opacity:.6">
+    </div>
+    <div class="detail-group">
+      <label>时间</label>
+      <input type="datetime-local" id="edit-time" step="1" value="${p.time?toLocalISO(p.time):''}" onchange="updatePointTime(${index},this.value)">
+    </div>
+    <div class="detail-group">
+      <label>经度 (WGS84)</label>
+      <input type="number" step="0.000001" id="edit-lon" value="${p.lon}" onchange="updatePointCoord(${index},'lon',+this.value)">
+    </div>
+    <div class="detail-group">
+      <label>纬度 (WGS84)</label>
+      <input type="number" step="0.000001" id="edit-lat" value="${p.lat}" onchange="updatePointCoord(${index},'lat',+this.value)">
+    </div>
+    <div class="detail-group">
+      <label>高程 (米)</label>
+      <input type="number" step="0.1" id="edit-alt" value="${p.alt}" onchange="updatePointAlt(${index},+this.value)">
+    </div>
+    <div class="detail-actions">
+      <button class="btn" onclick="locatePoint(${index})">定位</button>
+      <button class="btn danger" onclick="deletePoint(${index})">删除此点</button>
+    </div>
+  `;
+  switchTab('detail');
+}
+
+function locatePoint(index) {
+  if(index<0||index>=trackPoints.length) return;
+  const c=gcjCache[index];
+  map.setCenter(new AMap.LngLat(c[0],c[1]));
+  map.setZoom(16);
+}
+
+function updatePointCoord(index, field, value) {
+  pushUndo();
+  trackPoints[index][field]=value;
+  gcjCache[index]=wgs2gcj(trackPoints[index].lon, trackPoints[index].lat);
+  // Update polyline
+  const path=polyline.getPath();
+  path[index]=new AMap.LngLat(gcjCache[index][0],gcjCache[index][1]);
+  polyline.setPath(path);
+  updateSelectedMarker();
+}
+
+function updatePointAlt(index, value) {
+  pushUndo();
+  trackPoints[index].alt=value;
+  drawTimeline();
+}
+
+function updatePointTime(index, value) {
+  pushUndo();
+  trackPoints[index].time = value ? new Date(value) : null;
+  // Re-sort to maintain time ordering
+  const editedPoint = trackPoints[index];
+  trackPoints.sort((a,b)=>{if(!a.time||!b.time)return 0;return a.time-b.time;});
+  // Find new index of the edited point
+  const newIdx = trackPoints.indexOf(editedPoint);
+  rebuildGcjCache();
+  selectedIndex = newIdx;
+  renderPolyline();
+  updateSelectedMarker();
+  drawTimeline();
+  updateTimelineCursor();
+  updatePointList();
+  updateImportedList();
+  showPointDetail(newIdx);
+  toast(`时间已更新，新序号 #${newIdx}`,'info');
+}
+
+// ===================== DELETE / ADD =====================
+function deletePoint(index) {
+  const p=trackPoints[index];
+  if(!confirm(`确定删除点 #${index}？\n时间: ${p.time?formatTime(p.time):'无'}\n坐标: ${p.lon.toFixed(6)}, ${p.lat.toFixed(6)}`))return;
+  pushUndo();
+  trackPoints.splice(index,1);
+  selectedIndex=-1;
+  afterTrackChanged();
+  document.getElementById('tab-detail').innerHTML='<p style="color:var(--text-muted);font-size:13px;">点已删除</p>';
+  toast('记录点已删除','warn');
+}
+function deleteSelectedFromContext(){if(selectedIndex>=0&&selectedIndex<trackPoints.length)deletePoint(selectedIndex);}
+
+function addNewPointFromToolbar() {
+  const center = map.getCenter();
+  const [wl, wt] = gcj2wgs(center.getLng(), center.getLat());
+  showAddPointModal(wl, wt);
+}
+
+function addPointAtContextPos() {
+  if(!contextLngLat)return;
+  const[wl,wt]=gcj2wgs(contextLngLat.getLng(),contextLngLat.getLat());
+  showAddPointModal(wl,wt);
+}
+
+function showAddPointModal(lon, lat) {
+  const ov=document.createElement('div'); ov.className='modal-overlay';
+  let dt='';
+  if(trackPoints.length>0&&trackPoints[0].time) dt=toLocalISO(trackPoints[Math.floor(trackPoints.length/2)].time);
+  ov.innerHTML=`<div class="modal"><h3>添加记录点</h3>
+    <div class="form-row"><label>时间</label><input type="datetime-local" id="new-pt-time" step="1" value="${dt}"></div>
+    <div class="form-row"><label>经度 (WGS84)</label><input type="number" step="0.000001" id="new-pt-lon" value="${lon.toFixed(6)}"></div>
+    <div class="form-row"><label>纬度 (WGS84)</label><input type="number" step="0.000001" id="new-pt-lat" value="${lat.toFixed(6)}"></div>
+    <div class="form-row"><label>高程 (米)</label><input type="number" step="0.1" id="new-pt-alt" value="0"></div>
+    <div class="modal-actions"><button class="btn" onclick="this.closest('.modal-overlay').remove()">取消</button>
+    <button class="btn primary" onclick="confirmAddPoint(this)">添加</button></div></div>`;
+  document.body.appendChild(ov);
+}
+
+function confirmAddPoint(btn) {
+  const ov=btn.closest('.modal-overlay');
+  const tv=document.getElementById('new-pt-time').value;
+  const lon=+document.getElementById('new-pt-lon').value, lat=+document.getElementById('new-pt-lat').value;
+  const alt=+document.getElementById('new-pt-alt').value||0;
+  if(isNaN(lon)||isNaN(lat)){toast('请输入有效的坐标','error');return;}
+  pushUndo();
+  trackPoints.push({time:tv?new Date(tv):null,lon,lat,alt});
+  trackPoints.sort((a,b)=>{if(!a.time||!b.time)return 0;return a.time-b.time;});
+  ov.remove();
+  afterTrackChanged();
+  enableButtons();
+  toast('已添加新记录点','success');
+}
+
+// ===================== POINT LIST (VIRTUALIZED) =====================
+function updatePointList() {
+  const container=document.getElementById('point-list-container');
+  if(!trackPoints.length){container.innerHTML='<p style="color:var(--text-muted);font-size:13px;padding:10px;">暂无数据</p>';return;}
+  // For large lists, only render visible items
+  const ROW_H=26;
+  const visibleH=container.parentElement.clientHeight||400;
+  const totalH=trackPoints.length*ROW_H;
+  container.style.position='relative';
+  container.style.height=totalH+'px';
+  container.innerHTML='';
+
+  // We'll do a simple approach: render all but as lightweight as possible
+  // For 6000 items this is ~6000 small divs which is fine with innerHTML
+  let html='';
+  for(let i=0;i<trackPoints.length;i++){
+    const p=trackPoints[i];
+    const cls=i===selectedIndex?'point-item active':(p.source?'point-item imported':'point-item');
+    html+=`<div class="${cls}" onclick="selectPoint(${i})" data-idx="${i}">`;
+    html+=`<span class="idx">${i}</span>`;
+    html+=`<span class="time">${p.time?fmtHMS(p.time):'--'}</span>`;
+    if(p.source) html+=`<span class="src-badge">${p.source}</span>`;
+    html+=`<span class="alt">${p.alt.toFixed(0)}m</span></div>`;
+  }
+  container.style.height='auto';
+  container.innerHTML=html;
+}
+
+function updateImportedList() {
+  const container=document.getElementById('imported-list-container');
+  const imported=trackPoints.map((p,i)=>({...p,_idx:i})).filter(p=>p.source);
+  if(!imported.length){container.innerHTML='<p style="color:var(--text-muted);font-size:13px;padding:10px;">暂无导入点</p>';return;}
+  let html='';
+  for(const p of imported){
+    const cls=p._idx===selectedIndex?'point-item active imported':'point-item imported';
+    html+=`<div class="${cls}" onclick="selectPoint(${p._idx})" data-idx="${p._idx}">`;
+    html+=`<span class="idx">${p._idx}</span>`;
+    html+=`<span class="time">${p.time?fmtHMS(p.time):'--'}</span>`;
+    html+=`<span class="src-badge">${p.source}</span>`;
+    html+=`<span class="alt">${p.alt.toFixed(0)}m</span></div>`;
+  }
+  container.innerHTML=html;
+}
+
+function highlightListItem(index) {
+  document.querySelectorAll('.point-item').forEach(el=>el.classList.remove('active'));
+  const el=document.querySelector(`.point-item[data-idx="${index}"]`);
+  if(el){el.classList.add('active');el.scrollIntoView({block:'nearest',behavior:'smooth'});}
+}
+
+// ===================== PANEL TABS =====================
+function switchTab(name) {
+  document.querySelectorAll('.panel-tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
+  ['detail','list','imported','export'].forEach(t=>{
+    document.getElementById('tab-'+t).style.display=t===name?'':'none';
+  });
+}
+function togglePanel(){document.getElementById('side-panel').classList.toggle('collapsed');setTimeout(()=>map&&map.resize(),300);}
+
+// ===================== EXPORT =====================
+function generateKML(points) {
+  let ws='', cs='';
+  points.forEach(p=>{
+    if(p.time) ws+=`        <when>${p.time.toISOString()}</when>\n`;
+    cs+=`        <gx:coord>${p.lon} ${p.lat} ${p.alt}</gx:coord>\n`;
+  });
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
+  <Document>
+    <name>轨迹导出</name>
+    <Folder id="TbuluTrackFolder">
+      <Placemark>
+        <name>轨迹</name>
+        <gx:Track>
+${ws}${cs}        </gx:Track>
+      </Placemark>
+    </Folder>
+  </Document>
+</kml>`;
+}
+
+function generateGPX(points) {
+  let ts='';
+  points.forEach(p=>{
+    ts+=`      <trkpt lat="${p.lat}" lon="${p.lon}">\n        <ele>${p.alt}</ele>\n`;
+    if(p.time) ts+=`        <time>${p.time.toISOString()}</time>\n`;
+    ts+=`      </trkpt>\n`;
+  });
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="KML轨迹编辑器" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>轨迹导出</name>
+    <trkseg>
+${ts}    </trkseg>
+  </trk>
+</gpx>`;
+}
+
+function dl(content,filename){const b=new Blob([content],{type:'application/octet-stream'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=filename;a.click();URL.revokeObjectURL(u);}
+function exportKML(){if(!trackPoints.length)return;dl(generateKML(trackPoints),'track_export.kml');toast('KML已导出','success');}
+function exportGPX(){if(!trackPoints.length)return;dl(generateGPX(trackPoints),'track_export.gpx');toast('GPX已导出','success');}
+
+function showExportRangePanel(){
+  switchTab('export');
+  if(trackPoints.length){
+    const f=trackPoints[0],l=trackPoints[trackPoints.length-1];
+    if(exportRangeStart<0) exportRangeStart=0;
+    if(exportRangeEnd<0) exportRangeEnd=trackPoints.length-1;
+    document.getElementById('export-start-idx').max=trackPoints.length-1;
+    document.getElementById('export-end-idx').max=trackPoints.length-1;
+    updateExportRangeVisuals();
+  }
+}
+function updateExportRangeUI(){
+  const m=document.getElementById('export-mode').value;
+  document.getElementById('export-time-fields').style.display=m==='time'?'':'none';
+  document.getElementById('export-point-fields').style.display=m==='point'?'':'none';
+}
+
+function getExportRange() {
+  const s=Math.min(exportRangeStart,exportRangeEnd), e=Math.max(exportRangeStart,exportRangeEnd);
+  if(s<0||e<0||s>=trackPoints.length||e>=trackPoints.length) return null;
+  return trackPoints.slice(s, e+1);
+}
+
+function exportPartialKML(){const pts=getExportRange();if(!pts||!pts.length){toast('请先设置导出范围','warn');return;}dl(generateKML(pts),'track_partial.kml');toast(`已导出 ${pts.length} 个点的KML`,'success');}
+function exportPartialGPX(){const pts=getExportRange();if(!pts||!pts.length){toast('请先设置导出范围','warn');return;}dl(generateGPX(pts),'track_partial.gpx');toast(`已导出 ${pts.length} 个点的GPX`,'success');}
+
+// ===================== IMPORT CSV =====================
+function handleImportCSV(event) {
+  const file=event.target.files[0]; if(!file)return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const lines=e.target.result.split(/\r?\n/).filter(l=>l.trim());
+    pushUndo();
+    let added=0;
+    for(const line of lines){
+      if(line.match(/^[a-zA-Z\u4e00-\u9fff]/)) continue;
+      const parts=line.split(',').map(s=>s.trim());
+      if(parts.length<3) continue;
+      try{
+        const time=parseCSVTime(parts[0]), lon=+parts[1], lat=+parts[2];
+        const alt=parts.length>=4?+parts[3]:0;
+        if(isNaN(lon)||isNaN(lat)) continue;
+        trackPoints.push({time,lon,lat,alt:isNaN(alt)?0:alt,source:'CSV'});
+        added++;
+      }catch{continue;}
+    }
+    if(added>0){
+      trackPoints.sort((a,b)=>{if(!a.time||!b.time)return 0;return a.time-b.time;});
+      afterTrackChanged(); enableButtons();
+      document.getElementById('status-text').textContent=`${trackPoints.length} 个点`;
+      toast(`从CSV导入了 ${added} 个点`,'success');
+    } else { toast('CSV中未找到有效数据。格式: 时间,经度,纬度,高程(可选)','error',5000); }
+  };
+  reader.readAsText(file); event.target.value='';
+}
+function parseCSVTime(s){if(!s)return null;let d=new Date(s);if(!isNaN(d))return d;d=new Date(s.replace(/\//g,'-'));return isNaN(d)?null:d;}
+
+// ===================== IMPORT IMAGES (JPG + HEIF) =====================
+function handleImportImages(event) {
+  const files=event.target.files;
+  if(!files||!files.length) return;
+  pushUndo();
+  let processed=0, added=0;
+  const total=files.length;
+
+  toast(`正在处理 ${total} 个文件...`,'info',2000);
+
+  for(const file of files){
+    const isHeif=/\.(heic|heif)$/i.test(file.name);
+    if(isHeif){
+      processHeifFile(file, ()=>{processed++;if(processed===total)finishImageImport(added);}, (ok)=>{if(ok)added++;});
+    } else {
+      processJpgFile(file, ()=>{processed++;if(processed===total)finishImageImport(added);}, (ok)=>{if(ok)added++;});
+    }
+  }
+  event.target.value='';
+}
+
+function processJpgFile(file, onDone, onResult) {
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const img=new Image();
+    img.onload=function(){
+      EXIF.getData(img,function(){
+        const ok=extractExifGPS(this, file.name);
+        onResult(ok); onDone();
+      });
+    };
+    img.onerror=function(){onResult(false);onDone();};
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function processHeifFile(file, onDone, onResult) {
+  if(typeof findEXIFinHEIC==='undefined'){
+    toast('HEIF EXIF支持库未加载','error'); onResult(false); onDone(); return;
+  }
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try {
+      const tags = findEXIFinHEIC(e.target.result);
+      if(!tags){onResult(false);onDone();return;}
+      const ok = extractExifGPSFromTags(tags, file.name);
+      onResult(ok); onDone();
+    } catch(err) {
+      console.warn('HEIF EXIF提取失败:', file.name, err);
+      onResult(false); onDone();
+    }
+  };
+  reader.onerror=function(){onResult(false);onDone();};
+  reader.readAsArrayBuffer(file);
+}
+
+function extractExifGPS(imgEl, filename) {
+  const lat=EXIF.getTag(imgEl,'GPSLatitude'), latRef=EXIF.getTag(imgEl,'GPSLatitudeRef');
+  const lon=EXIF.getTag(imgEl,'GPSLongitude'), lonRef=EXIF.getTag(imgEl,'GPSLongitudeRef');
+  const altVal=EXIF.getTag(imgEl,'GPSAltitude');
+  const dateStr=EXIF.getTag(imgEl,'DateTimeOriginal');
+  if(!lat||!lon) return false;
+  let latD=dmsToDecimal(lat), lonD=dmsToDecimal(lon);
+  if(latRef==='S') latD=-latD;
+  if(lonRef==='W') lonD=-lonD;
+  const alt=altVal?(typeof altVal==='object'?altVal.numerator/altVal.denominator:+altVal):0;
+  let time=null;
+  if(dateStr){
+    const fixed=dateStr.replace(/^(\d{4}):(\d{2}):(\d{2})/,'$1-$2-$3');
+    time=new Date(fixed); if(isNaN(time))time=null;
+  }
+  trackPoints.push({time, lon:lonD, lat:latD, alt:isNaN(alt)?0:alt, source:'图片'});
+  return true;
+}
+
+function extractExifGPSFromTags(tags, filename) {
+  const lat=tags['GPSLatitude'], latRef=tags['GPSLatitudeRef'];
+  const lon=tags['GPSLongitude'], lonRef=tags['GPSLongitudeRef'];
+  const altVal=tags['GPSAltitude'];
+  const dateStr=tags['DateTimeOriginal'];
+  if(!lat||!lon) return false;
+  let latD=dmsToDecimal(lat), lonD=dmsToDecimal(lon);
+  if(latRef==='S') latD=-latD;
+  if(lonRef==='W') lonD=-lonD;
+  const alt=altVal?(typeof altVal==='object'?altVal.numerator/altVal.denominator:+altVal):0;
+  let time=null;
+  if(dateStr){
+    const fixed=dateStr.replace(/^(\d{4}):(\d{2}):(\d{2})/,'$1-$2-$3');
+    time=new Date(fixed); if(isNaN(time))time=null;
+  }
+  trackPoints.push({time, lon:lonD, lat:latD, alt:isNaN(alt)?0:alt, source:'图片'});
+  return true;
+}
+
+function dmsToDecimal(dms){
+  if(!dms||dms.length<3)return 0;
+  const d=typeof dms[0]==='object'?dms[0].numerator/dms[0].denominator:dms[0];
+  const m=typeof dms[1]==='object'?dms[1].numerator/dms[1].denominator:dms[1];
+  const s=typeof dms[2]==='object'?dms[2].numerator/dms[2].denominator:dms[2];
+  return d+m/60+s/3600;
+}
+
+function finishImageImport(added) {
+  if(added>0){
+    trackPoints.sort((a,b)=>{if(!a.time||!b.time)return 0;return a.time-b.time;});
+    afterTrackChanged(); enableButtons();
+    document.getElementById('status-text').textContent=`${trackPoints.length} 个点`;
+    toast(`从图片导入了 ${added} 个GPS点`,'success');
+    switchTab('imported');
+  } else {
+    toast('未从图片中读取到GPS信息','warn',5000);
+  }
+}
+
+// ===================== UTILITY =====================
+function formatTime(d){if(!d)return'--';const p=n=>String(n).padStart(2,'0');return`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
+function fmtHMS(d){if(!d)return'--';const p=n=>String(n).padStart(2,'0');return`${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
+function toLocalISO(d){if(!d)return'';const off=d.getTimezoneOffset();return new Date(d.getTime()-off*60000).toISOString().slice(0,19);}
+
+// ===================== KEYBOARD =====================
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo();return;}
+  if((e.ctrlKey||e.metaKey)&&e.key==='y'){e.preventDefault();redo();return;}
+  if(e.key==='Escape'){
+    const trainOv=document.getElementById('train-import-overlay');
+    if(trainOv && trainOv.style.display!=='none'){closeTrainImportModal();return;}
+  }
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT'||e.target.tagName==='TEXTAREA')return;
+  if(e.key==='Delete'&&selectedIndex>=0&&selectedIndex<trackPoints.length)deletePoint(selectedIndex);
+  if(e.key==='ArrowLeft') selectPrev();
+  if(e.key==='ArrowRight') selectNext();
+});
+
+// ===================== RESIZE =====================
+window.addEventListener('resize',()=>{
+  if(map)map.resize();
+  if(trackPoints.length>0){drawTimeline();updateTimelineCursor();updateExportRangeVisuals();}
+});
+
+// ===================== INIT =====================
+initMap();
+</script>
+</body>
+</html>

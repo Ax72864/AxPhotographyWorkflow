@@ -1,0 +1,130 @@
+{
+  "train_code": "G2270",
+  "train_no": "6c000G22700A",
+  "depart_date": "2026-04-18",
+  "from": "长沙南",
+  "to": "深圳北",
+  "fetched_at": "2026-04-20T13:39:39+08:00",
+  "stations": [
+    {
+      "no": 1,
+      "name": "长沙南",
+      "arrive": null,
+      "start": "07:29",
+      "day": 0,
+      "running": "00:00",
+      "telecode": "CWQ",
+      "lon": 113.0598811,
+      "lat": 28.1500782,
+      "geo_source": "osm"
+    },
+    {
+      "no": 2,
+      "name": "萍乡北",
+      "arrive": "07:56",
+      "start": "07:58",
+      "day": 0,
+      "running": "00:27",
+      "telecode": "PBG",
+      "lon": 113.8422996,
+      "lat": 27.6874541,
+      "geo_source": "osm"
+    },
+    {
+      "no": 3,
+      "name": "南昌西",
+      "arrive": "08:55",
+      "start": "09:04",
+      "day": 0,
+      "running": "01:26",
+      "telecode": "NXG",
+      "lon": 115.7877114,
+      "lat": 28.6257294,
+      "geo_source": "osm"
+    },
+    {
+      "no": 4,
+      "name": "吉水西",
+      "arrive": "09:55",
+      "start": "09:57",
+      "day": 0,
+      "running": "02:26",
+      "telecode": "JSG",
+      "lon": 115.0856591,
+      "lat": 27.2813836,
+      "geo_source": "osm"
+    },
+    {
+      "no": 5,
+      "name": "万安县",
+      "arrive": "10:21",
+      "start": "10:23",
+      "day": 0,
+      "running": "02:52",
+      "telecode": "WAG",
+      "lon": 114.8386311,
+      "lat": 26.5286066,
+      "geo_source": "osm"
+    },
+    {
+      "no": 6,
+      "name": "赣县北",
+      "arrive": "10:46",
+      "start": "10:48",
+      "day": 0,
+      "running": "03:17",
+      "telecode": "GIG",
+      "lon": 115.1502285,
+      "lat": 26.0093084,
+      "geo_source": "osm"
+    },
+    {
+      "no": 7,
+      "name": "赣州西",
+      "arrive": "11:02",
+      "start": "11:07",
+      "day": 0,
+      "running": "03:33",
+      "telecode": "GOG",
+      "lon": 114.8109169,
+      "lat": 25.8232973,
+      "geo_source": "osm"
+    },
+    {
+      "no": 8,
+      "name": "和平北",
+      "arrive": "11:46",
+      "start": "11:48",
+      "day": 0,
+      "running": "04:17",
+      "telecode": "HPA",
+      "lon": 114.9549294,
+      "lat": 24.4754863,
+      "geo_source": "osm"
+    },
+    {
+      "no": 9,
+      "name": "东莞南",
+      "arrive": "12:43",
+      "start": "12:45",
+      "day": 0,
+      "running": "05:14",
+      "telecode": "DNA",
+      "lon": 114.063536,
+      "lat": 22.8480574,
+      "geo_source": "osm"
+    },
+    {
+      "no": 10,
+      "name": "深圳北",
+      "arrive": "13:05",
+      "start": "13:05",
+      "day": 0,
+      "running": "05:36",
+      "telecode": "IOQ",
+      "lon": 114.0239469,
+      "lat": 22.6120365,
+      "geo_source": "osm"
+    }
+  ]
+}

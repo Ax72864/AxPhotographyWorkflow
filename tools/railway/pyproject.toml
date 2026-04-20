@@ -1,0 +1,20 @@
+[project]
+name = "ax-railway"
+version = "0.1.0"
+description = "由车次号生成铁路行程轨迹（KML），用于 kmlTrackEditor.html"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+# 阶段 2：OSM 铁路线吸附（路径贴合真实铁路）
+snap = [
+    "shapely>=2.0",
+    "networkx>=3.0",
+    "pyproj>=3.6",
+    "rtree>=1.1",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,63 @@
+{
+  "train_code": "G1",
+  "train_no": "24000000G10L",
+  "depart_date": "2026-04-21",
+  "from": "沧州西",
+  "to": "南京南",
+  "fetched_at": "2026-04-20T12:28:06+08:00",
+  "stations": [
+    {
+      "no": 2,
+      "name": "沧州西",
+      "arrive": "07:18",
+      "start": "07:20",
+      "day": 0,
+      "running": "00:48",
+      "telecode": "CBP",
+      "lon": 116.7619627,
+      "lat": 38.3062792,
+      "geo_source": "osm"
+    },
+    {
+      "no": 3,
+      "name": "德州东",
+      "arrive": "07:45",
+      "start": "07:47",
+      "day": 0,
+      "running": "01:15",
+      "telecode": "DIP",
+      "lon": 116.4558211,
+      "lat": 37.4089344,
+      "geo_source": "osm"
+    },
+    {
+      "no": 4,
+      "name": "曲阜东",
+      "arrive": "08:34",
+      "start": "08:36",
+      "day": 0,
+      "running": "02:04",
+      "telecode": "QAK",
+      "lon": 117.064341,
+      "lat": 35.5565465,
+      "geo_source": "osm"
+    },
+    {
+      "no": 5,
+      "name": "南京南",
+      "arrive": "10:13",
+      "start": "10:15",
+      "day": 0,
+      "running": "03:43",
+      "telecode": "NKH",
+      "lon": 118.7930516,
+      "lat": 31.970797,
+      "geo_source": "osm"
+    }
+  ],
+  "sliced_from_full": {
+    "original_stations": 7,
+    "from_idx_1based": 2,
+    "to_idx_1based": 5
+  }
+}
