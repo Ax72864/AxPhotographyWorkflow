@@ -5,7 +5,6 @@ import math
 import argparse
 import os
 import re
-import glob
 import piexif
 from fractions import Fraction
 import traceback
@@ -757,16 +756,14 @@ def find_related_files(raw_file_path):
 
 def find_files_to_process(photos_dir):
     """查找需要处理的文件"""
-    # 查找所有RAW文件
-    raw_extensions = ['*.ARW', '*.ORI', '*.ORF', '*.CR2', '*.NEF', '*.RAF']
+    # 查找所有RAW/图片文件
+    raw_extensions = {'.arw', '.ori', '.orf', '.cr2', '.nef', '.raf', '.dng', '.tif', '.tiff', '.jpg', '.jpeg'}
     raw_files = []
-    
-    for ext in raw_extensions:
-        pattern = os.path.join(photos_dir, "**", ext)
-        raw_files.extend(glob.glob(pattern, recursive=True))
-        # 同时查找小写扩展名
-        pattern_lower = os.path.join(photos_dir, "**", ext.lower())
-        raw_files.extend(glob.glob(pattern_lower, recursive=True))
+
+    for root, _, files in os.walk(photos_dir):
+        for filename in files:
+            if os.path.splitext(filename)[1].lower() in raw_extensions:
+                raw_files.append(os.path.join(root, filename))
     
     files_to_process = []
     for raw_file in raw_files:
