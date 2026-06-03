@@ -3,6 +3,7 @@ import io
 import re
 import base64
 import argparse
+import shutil
 import numpy as np
 from PIL import Image
 from collections import Counter
@@ -14,6 +15,11 @@ ORIENTATION_MODEL = "qwen3-vl-plus"
 
 # 半格底片最大长宽比 (24mm / 17mm)
 MAX_HALF_FRAME_RATIO = 24.0 / 17.0  # ≈ 1.412
+SOURCE_EXTENSIONS = ('.tif', '.tiff', '.bmp')
+THM_EXTENSIONS = ('.thm',)
+ORI_DIR_NAME = "ori"
+TIF_DIR_NAME = "tif"
+OUT_DIR_NAME = "out"
 
 # LLM 客户端延迟初始化，避免 import 失败影响基础功能
 _llm_client = None
@@ -245,9 +251,192 @@ def _save_with_exif(img, path, quality, exif_bytes=None):
     img.save(path, 'JPEG', **kwargs)
 
 
+def _build_tiff_camera_exif(exif_bytes, orientation=1):
+    """
+    构造写入新 TIF 的 EXIF：仅保留相机/拍摄相关 tag (ExifIFD 0x8769、
+    GPS 0x8825、Make/Model/DateTime 等)，过滤掉源 TIF 的结构性 tag
+    (ImageWidth/ImageLength/StripOffsets/StripByteCounts/RowsPerStrip 等)
+    —— 这些结构 tag 描述的是源文件的像素布局，写到新文件会让 PIL
+    解码器读取错误，导致输出文件损坏 (输出尺寸异常、image truncated)。
+
+    始终写入指定的 Orientation (默认 1)。
+    """
+    from PIL.Image import Exif
+    new_exif = Exif()
+
+    # 允许保留的 EXIF tag (避开 TIFF 的结构性 IFD 字段)
+    SAFE_TAGS = {
+        0x010F,  # Make
+        0x0110,  # Model
+        0x0131,  # Software
+        0x0132,  # DateTime
+        0x013B,  # Artist
+        0x013E,  # WhitePoint
+        0x013F,  # PrimaryChromaticities
+        0x0211,  # YCbCrCoefficients
+        0x0213,  # YCbCrPositioning
+        0x0214,  # ReferenceBlackWhite
+        0x8298,  # Copyright
+        0x8769,  # ExifIFD pointer (相机拍摄参数)
+        0x8825,  # GPSIFD pointer
+        0x9003,  # DateTimeOriginal
+        0x9004,  # DateTimeDigitized
+    }
+
+    if exif_bytes:
+        try:
+            src_exif = Exif()
+            src_exif.load(exif_bytes)
+            for tag, val in src_exif.items():
+                if tag in SAFE_TAGS:
+                    new_exif[tag] = val
+        except Exception:
+            pass
+
+    new_exif[0x0112] = orientation
+    return new_exif.tobytes()
+
+
+def _save_image(img, path, output_format, quality, exif_bytes=None):
+    """
+    根据 output_format 保存图片为 JPG 或 TIF。
+    - jpg: 使用 quality 参数有损压缩
+    - tif: 无压缩，过滤后保留相机相关 EXIF（quality 参数被忽略）
+    """
+    if output_format == 'tif':
+        safe_exif = _build_tiff_camera_exif(exif_bytes, orientation=1)
+        kwargs = {'compression': 'raw', 'exif': safe_exif}
+        img.save(path, 'TIFF', **kwargs)
+    else:
+        _save_with_exif(img, path, quality, exif_bytes)
+
+
+def _output_extension(output_format):
+    """根据输出格式返回文件扩展名（含点号）。"""
+    return '.tif' if output_format == 'tif' else '.jpg'
+
+
+def _same_path(path_a, path_b):
+    """判断两个路径是否指向同一目录。"""
+    return (os.path.normcase(os.path.abspath(path_a)) ==
+            os.path.normcase(os.path.abspath(path_b)))
+
+
+def _list_files_by_extensions(directory, extensions):
+    """列出目录下指定扩展名的普通文件，按文件名排序。"""
+    if not os.path.isdir(directory):
+        return []
+    return sorted([
+        f for f in os.listdir(directory)
+        if os.path.isfile(os.path.join(directory, f)) and
+        f.lower().endswith(extensions)
+    ])
+
+
+def _list_source_files(directory):
+    """列出脚本支持处理的源图片文件。"""
+    return _list_files_by_extensions(directory, SOURCE_EXTENSIONS)
+
+
+def _list_thm_files(directory):
+    """列出同目录下的 THM 伴随文件。"""
+    return _list_files_by_extensions(directory, THM_EXTENSIONS)
+
+
+def _move_files_to_dir(source_dir, filenames, target_dir):
+    """将文件移动到目标目录；目标重名时停止，避免覆盖原片。"""
+    if not filenames:
+        return 0
+
+    os.makedirs(target_dir, exist_ok=True)
+    for filename in filenames:
+        target_path = os.path.join(target_dir, filename)
+        if os.path.exists(target_path):
+            raise FileExistsError(f"目标文件已存在: {target_path}")
+
+    for filename in filenames:
+        shutil.move(os.path.join(source_dir, filename),
+                    os.path.join(target_dir, filename))
+    return len(filenames)
+
+
+def _prepare_managed_directories(directory, output_dir, half_frame):
+    """
+    默认同目录工作流：
+    - 根目录源图先归档到 ori，THM 一并移动
+    - 切分模式: ori -> tif
+    - 导出模式: tif -> out；若没有 tif 但有 ori，则 ori -> out
+    显式输出到其它目录时返回原始目录规则。
+    """
+    use_managed_dirs = output_dir is None or _same_path(output_dir, directory)
+    if not use_managed_dirs:
+        return directory, output_dir, False
+
+    base_dir = os.path.abspath(directory)
+    ori_dir = os.path.join(base_dir, ORI_DIR_NAME)
+    tif_dir = os.path.join(base_dir, TIF_DIR_NAME)
+    out_dir = os.path.join(base_dir, OUT_DIR_NAME)
+
+    root_sources = _list_source_files(base_dir)
+    moved_root_sources = bool(root_sources)
+    if root_sources:
+        root_thms = _list_thm_files(base_dir)
+        moved_count = _move_files_to_dir(
+            base_dir, root_sources + root_thms, ori_dir)
+        print(f"已将根目录原片/THM 归档到: {ori_dir} ({moved_count} 个文件)")
+
+    if half_frame:
+        return ori_dir, tif_dir, True
+
+    if moved_root_sources:
+        return ori_dir, out_dir, True
+
+    if _list_source_files(tif_dir):
+        return tif_dir, out_dir, True
+
+    if _list_source_files(ori_dir):
+        return ori_dir, out_dir, True
+
+    return base_dir, out_dir, True
+
+
+def _seq_width(total):
+    """根据总输出张数决定序号位数：≤99 用 2 位，≤999 用 3 位，依此类推。"""
+    if total <= 0:
+        return 1
+    return max(2, len(str(total)))
+
+
+def _build_seq_prefix(file_index, sub_index, file_count, sub_per_file, order):
+    """
+    根据排序模式计算输出文件应使用的序号前缀字符串（不含下划线）。
+
+    参数:
+        file_index: 当前源图片在 sorted 列表中的索引 (0-based)。
+        sub_index:  在当前源图片内部的子图索引 (半格模式下 0=左, 1=右；
+                    标准模式下恒为 0)。
+        file_count: 源图片文件总数。
+        sub_per_file: 每个源图片产出的子图数 (半格=2, 标准=1)。
+        order:      'reverse' 或 'normal'。
+                    reverse 时整卷倒序，且每张源图片内部 _a 仍在 _b 之前。
+
+    返回零填充的序号字符串，如 "01", "076"。
+    """
+    total = file_count * sub_per_file
+    width = _seq_width(total)
+
+    if order == 'reverse':
+        # 整卷倒序：最后一张源图片的 _a 是 #1，_b 是 #2
+        seq = (file_count - 1 - file_index) * sub_per_file + sub_index + 1
+    else:
+        seq = file_index * sub_per_file + sub_index + 1
+
+    return str(seq).zfill(width)
+
+
 def ensure_rgb(img):
-    """确保图片为 RGB 模式（JPG 不支持 RGBA/P）。"""
-    if img.mode in ('RGBA', 'P'):
+    """确保图片为 RGB 模式，便于 JPG 保存和 NumPy 半格切分。"""
+    if img.mode != 'RGB':
         return img.convert('RGB')
     return img
 
@@ -299,7 +488,7 @@ def _detect_gap_for_single(arr):
     return best_gap
 
 
-def detect_gap_positions(tif_files, directory):
+def detect_gap_positions(source_files, directory):
     """
     两阶段间隙检测：先从亮照片检测间隙，再为暗照片提供回退位置。
 
@@ -309,10 +498,11 @@ def detect_gap_positions(tif_files, directory):
     detected_gaps = []
     brightnesses = []
 
-    for f in tif_files:
+    for f in source_files:
         path = os.path.join(directory, f)
-        img = Image.open(path)
-        arr = np.array(img)
+        with Image.open(path) as img:
+            img = ensure_rgb(img)
+            arr = np.array(img)
 
         gap = _detect_gap_for_single(arr)
         detected_gaps.append(gap)
@@ -322,7 +512,6 @@ def detect_gap_positions(tif_files, directory):
         strip = arr[h3:2 * h3, :, :]
         avg = np.mean(strip)
         brightnesses.append(avg)
-        img.close()
 
     # 从成功检测的间隙中计算平均位置
     valid_gaps = [g for g in detected_gaps if g is not None]
@@ -420,23 +609,45 @@ def split_half_frame(img, gap_start, gap_end):
     left_arr = clamp_aspect_ratio(left_arr)
     right_arr = clamp_aspect_ratio(right_arr)
 
+    # 必须强制转为连续数组，否则 Image.fromarray 创建的 PIL 图保留了对原大图的
+    # 内存视图（stride 指向原图的列宽），TIFF 等按 raw 字节写入的编码器会按
+    # 错误的 stride 拷贝整张原图的数据，导致输出文件尺寸异常。
+    left_arr = np.ascontiguousarray(left_arr)
+    right_arr = np.ascontiguousarray(right_arr)
+
     return Image.fromarray(left_arr), Image.fromarray(right_arr)
 
 
-def _orient_and_save(img, output_path, quality, label, exif_bytes=None):
+def _orient_and_save(img, output_path, output_format, quality, label,
+                     exif_bytes=None):
     """对单张图片执行朝向检测、旋转并保存。在线程池中调用。"""
     oriented, rotation = auto_orient(img, label=label)
     save_exif = _reset_orientation_in_exif(exif_bytes) if rotation else exif_bytes
-    _save_with_exif(oriented, output_path, quality, save_exif)
+    _save_image(oriented, output_path, output_format, quality, save_exif)
     return output_path, rotation
 
 
 def convert_tif_to_jpg(directory, quality=92, half_frame=False, output_dir=None,
-                       max_workers=4):
+                       max_workers=4, output_format='jpg', order='reverse'):
     """
-    将指定目录下的所有 tif/tiff 文件转换为 jpg。
-    当 half_frame=True 时，每张 TIF 会被切分为两张独立的半格照片。
+    将指定目录下的所有 tif/tiff/bmp 文件转换为 jpg 或 tif。
+    当 half_frame=True 时，每张源图片会被切分为两张独立的半格照片。
     所有输出图片都会通过 LLM 进行朝向检测并自动纠正。
+
+    未显式指定其它输出目录时，会使用目录工作流：
+      - 根目录源图自动移动到 ori，THM 伴随文件一并移动
+      - 切分模式: 从 ori 读取，输出无压缩 TIF 到 tif
+      - 导出模式: 优先从 tif 读取，输出到 out；没有 tif 时从 ori 读取
+
+    output_format:
+      - 'jpg' (默认): 输出 JPG，按 quality 压缩
+      - 'tif': 输出无压缩 TIF，保留全部画质，便于后期修图（quality 参数被忽略）
+
+    order:
+      - 'reverse' (默认): 由于扫描顺序是倒序的，最后一张源图片内的 _a 编号为 #1
+      - 'normal': 第一张源图片内的 _a 编号为 #1
+      文件名前缀格式: <序号>_<原文件名>[_a|_b].<ext>
+      序号位数根据总输出张数自动决定 (≤99 用 2 位)。
 
     处理流程（优化后）：
     1. 先批量完成所有格式转换/切分（CPU 密集，无需等待网络）
@@ -446,9 +657,28 @@ def convert_tif_to_jpg(directory, quality=92, half_frame=False, output_dir=None,
         print(f"错误: 目录 '{directory}' 不存在。")
         return
 
-    if output_dir is None:
-        output_dir = os.path.join(directory, "out")
+    if output_format not in ('jpg', 'tif'):
+        print(f"错误: 不支持的输出格式 '{output_format}'，请使用 jpg 或 tif")
+        return
+
+    if order not in ('reverse', 'normal'):
+        print(f"错误: 不支持的排序方式 '{order}'，请使用 reverse 或 normal")
+        return
+
+    try:
+        source_dir, output_dir, managed_dirs = _prepare_managed_directories(
+            directory, output_dir, half_frame)
+    except FileExistsError as e:
+        print(f"错误: {e}")
+        return
+
+    if managed_dirs and half_frame and output_format != 'tif':
+        print("托管切分模式: 输出格式固定为 TIF，便于后续导出到 out。")
+        output_format = 'tif'
+
     os.makedirs(output_dir, exist_ok=True)
+    if managed_dirs:
+        print(f"输入目录: {os.path.abspath(source_dir)}")
     print(f"输出目录: {os.path.abspath(output_dir)}")
 
     _, llm_ok = _get_llm_client()
@@ -457,15 +687,19 @@ def convert_tif_to_jpg(directory, quality=92, half_frame=False, output_dir=None,
     else:
         print("朝向检测: 已禁用 (LLM 不可用)")
 
-    tif_extensions = ('.tif', '.tiff', '.TIF', '.TIFF')
-    files = sorted([f for f in os.listdir(directory) if f.endswith(tif_extensions)])
+    files = _list_source_files(source_dir)
 
     if not files:
-        print(f"在 '{directory}' 中没有找到 TIF 文件。")
+        print(f"在 '{source_dir}' 中没有找到 TIF/BMP 文件。")
         return
 
     mode_text = "半格切分模式" if half_frame else "标准模式"
-    print(f"找到 {len(files)} 个文件，准备开始转换 ({mode_text}, 质量: {quality})...")
+    fmt_text = "TIF (无压缩)" if output_format == 'tif' else f"JPG (质量 {quality})"
+    order_text = "逆序 (扫描尾->头)" if order == 'reverse' else "正序 (扫描头->尾)"
+    sub_per_file = 2 if half_frame else 1
+    seq_width = _seq_width(len(files) * sub_per_file)
+    print(f"找到 {len(files)} 个文件，准备开始转换 ({mode_text}, 输出: {fmt_text}, "
+          f"编号: {order_text}, 序号 {seq_width} 位)...")
     print("-" * 60)
 
     # ========== 阶段一：批量格式转换 & 切分 ==========
@@ -473,7 +707,7 @@ def convert_tif_to_jpg(directory, quality=92, half_frame=False, output_dir=None,
 
     if half_frame:
         print("  正在检测整卷间隙位置...")
-        gap_positions, avg_gap = detect_gap_positions(files, directory)
+        gap_positions, avg_gap = detect_gap_positions(files, source_dir)
         print(f"  整卷平均间隙位置: 列 {avg_gap[0]} ~ {avg_gap[1]} "
               f"(宽度 {avg_gap[1] - avg_gap[0] + 1} 像素)")
 
@@ -482,7 +716,7 @@ def convert_tif_to_jpg(directory, quality=92, half_frame=False, output_dir=None,
     success_count = 0
 
     for i, filename in enumerate(files):
-        file_path = os.path.join(directory, filename)
+        file_path = os.path.join(source_dir, filename)
         file_name_without_ext = os.path.splitext(filename)[0]
 
         try:
@@ -490,37 +724,40 @@ def convert_tif_to_jpg(directory, quality=92, half_frame=False, output_dir=None,
                 exif_bytes = _extract_exif(img)
                 img = ensure_rgb(img)
 
+                ext = _output_extension(output_format)
                 if half_frame:
                     gap_s, gap_e = gap_positions[i]
                     left_img, right_img = split_half_frame(img, gap_s, gap_e)
 
-                    left_path = os.path.join(output_dir,
-                                             file_name_without_ext + "_a.jpg")
-                    right_path = os.path.join(output_dir,
-                                              file_name_without_ext + "_b.jpg")
+                    left_seq = _build_seq_prefix(i, 0, len(files), 2, order)
+                    right_seq = _build_seq_prefix(i, 1, len(files), 2, order)
+                    left_basename = (
+                        f"{left_seq}_{file_name_without_ext}_a")
+                    right_basename = (
+                        f"{right_seq}_{file_name_without_ext}_b")
+                    left_path = os.path.join(output_dir, left_basename + ext)
+                    right_path = os.path.join(output_dir, right_basename + ext)
 
                     print(f"  [{i+1}/{len(files)}] {filename} -> "
                           f"切分 (间隙 {gap_s}~{gap_e}) -> "
-                          f"左 {left_img.size[0]}x{left_img.size[1]}, "
-                          f"右 {right_img.size[0]}x{right_img.size[1]}")
+                          f"#{left_seq} 左 {left_img.size[0]}x{left_img.size[1]}, "
+                          f"#{right_seq} 右 {right_img.size[0]}x{right_img.size[1]}")
 
                     orient_tasks.append(
-                        (left_img, left_path,
-                         f"{file_name_without_ext}_a", exif_bytes))
+                        (left_img, left_path, left_basename, exif_bytes))
                     orient_tasks.append(
-                        (right_img, right_path,
-                         f"{file_name_without_ext}_b", exif_bytes))
+                        (right_img, right_path, right_basename, exif_bytes))
                 else:
-                    output_path = os.path.join(output_dir,
-                                               file_name_without_ext + ".jpg")
+                    seq = _build_seq_prefix(i, 0, len(files), 1, order)
+                    basename = f"{seq}_{file_name_without_ext}"
+                    output_path = os.path.join(output_dir, basename + ext)
                     print(f"  [{i+1}/{len(files)}] {filename} "
-                          f"({img.size[0]}x{img.size[1]})")
+                          f"({img.size[0]}x{img.size[1]}) -> #{seq}")
 
                     # 需要复制一份，因为 with 块退出后 img 关闭
                     img_copy = img.copy()
                     orient_tasks.append(
-                        (img_copy, output_path, file_name_without_ext,
-                         exif_bytes))
+                        (img_copy, output_path, basename, exif_bytes))
 
                 success_count += 1
         except Exception as e:
@@ -533,7 +770,7 @@ def convert_tif_to_jpg(directory, quality=92, half_frame=False, output_dir=None,
     if not llm_ok:
         print("\n[阶段 2/2] 保存图片 (朝向检测已跳过)...")
         for img, path, label, exif in orient_tasks:
-            _save_with_exif(img, path, quality, exif)
+            _save_image(img, path, output_format, quality, exif)
             print(f"  -> {os.path.basename(path)}")
     else:
         print(f"\n[阶段 2/2] 并行朝向检测 & 保存 (并发数: {max_workers})...")
@@ -544,7 +781,8 @@ def convert_tif_to_jpg(directory, quality=92, half_frame=False, output_dir=None,
             futures = {}
             for img, path, label, exif in orient_tasks:
                 future = executor.submit(
-                    _orient_and_save, img, path, quality, label, exif)
+                    _orient_and_save, img, path, output_format, quality,
+                    label, exif)
                 futures[future] = label
 
             for future in as_completed(futures):
@@ -565,18 +803,31 @@ def convert_tif_to_jpg(directory, quality=92, half_frame=False, output_dir=None,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="将目录中的所有 TIF 文件转换为 JPG。")
+        description=("将目录中的所有 TIF/BMP 文件转换为 JPG，或按半格切分为 "
+                     "TIF。默认使用 ori/tif/out 目录工作流。"))
 
-    parser.add_argument("directory", help="包含 TIF 文件的目录路径")
+    parser.add_argument("directory", help="包含 TIF/BMP 文件的目录路径")
 
     parser.add_argument("-q", "--quality", type=int, default=92,
-                        help="JPG 输出质量 (1-95)，默认为 92")
+                        help="JPG 输出质量 (1-95)，默认为 92 (TIF 模式下忽略)")
 
     parser.add_argument("--half-frame", "--split", action="store_true",
                         help="半格照片切分模式：将每张图切分为两张独立照片")
 
+    parser.add_argument("-f", "--format", default='jpg',
+                        choices=['jpg', 'tif'],
+                        help="输出格式：jpg (默认，有损压缩) 或 tif "
+                             "(无压缩，便于后期修图)")
+
     parser.add_argument("-o", "--output", default=None,
-                        help="输出目录路径 (默认: 输入目录/out/)")
+                        help="输出目录路径 (默认按 ori/tif/out 工作流；"
+                             "指定为其它目录时忽略该工作流)")
+
+    parser.add_argument("--order", default='reverse',
+                        choices=['reverse', 'normal'],
+                        help="输出文件编号顺序: reverse (默认, 适用于扫描"
+                             "倒序的胶片，最后一张源图片内的 _a 编号为 #1) "
+                             "或 normal (按文件名顺序)")
 
     parser.add_argument("-w", "--workers", type=int, default=4,
                         help="LLM 朝向检测并发数 (默认: 4)")
@@ -584,4 +835,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     convert_tif_to_jpg(args.directory, args.quality, args.half_frame,
-                       args.output, args.workers)
+                       args.output, args.workers, args.format, args.order)

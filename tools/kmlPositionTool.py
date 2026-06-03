@@ -803,6 +803,25 @@ def parse_datetime_with_timezone(time_str, tz_offset_hours=8):
     
     return aware_datetime
 
+def parse_time_offset(offset_str):
+    """解析 HH:MM:SS 格式的时间偏移，支持前缀 +/-。"""
+    match = re.fullmatch(r'([+-])?(\d+):([0-5]\d):([0-5]\d)', offset_str.strip())
+    if not match:
+        raise ValueError("offset格式错误，请使用 HH:MM:SS，例如 00:05:30 或 -00:05:30")
+
+    sign, hours, minutes, seconds = match.groups()
+    offset = timedelta(hours=int(hours), minutes=int(minutes), seconds=int(seconds))
+    return -offset if sign == '-' else offset
+
+def format_time_offset(offset):
+    """将 timedelta 格式化为 +/-HH:MM:SS。"""
+    total_seconds = int(offset.total_seconds())
+    sign = "-" if total_seconds < 0 else "+"
+    total_seconds = abs(total_seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{sign}{hours:02d}:{minutes:02d}:{seconds:02d}"
+
 def get_file_datetime(file_path, et=None):
     """获取文件的拍摄时间"""
     try:
@@ -949,13 +968,14 @@ def batch_get_file_datetimes(file_paths, et, batch_size=200):
     return results
 
 
-def fix_photos_gps(kml_file, photos_dir, force_overwrite=False,overwrite_active=False):
+def fix_photos_gps(kml_file, photos_dir, force_overwrite=False, overwrite_active=False, offset=timedelta(0)):
     """修复照片的GPS信息"""
     print(f"🚀 开始GPS修复...")
     print(f"KML文件: {kml_file}")
     print(f"照片目录: {photos_dir}")
     print(f"覆盖GPS数据: {'是' if force_overwrite else '否'}")
     print(f"覆盖机内GPS数据: {'是' if overwrite_active else '否'}")
+    print(f"照片时间偏移: {format_time_offset(offset)}")
 
     # 创建轨迹分析器
     try:
@@ -1014,11 +1034,12 @@ def fix_photos_gps(kml_file, photos_dir, force_overwrite=False,overwrite_active=
                 # 显示进度
                 progress = f"[{i+1}/{len(file_time_list)}]"
                 # 从轨迹中获取对应位置（已使用二分查找加速）
-                position_info = analyzer.get_position_at_time(photo_time)
+                lookup_time = photo_time + offset
+                position_info = analyzer.get_position_at_time(lookup_time)
                 
                 if position_info is None:
                     out_of_range_count += 1
-                    print(f"{progress} ⚠️ 时间超出轨迹范围，跳过: {os.path.basename(file_path)}")
+                    print(f"{progress} ⚠️ 时间超出轨迹范围，跳过: {os.path.basename(file_path)} (照片时间 {fmt_local(photo_time)}, 查找时间 {fmt_local(lookup_time)})")
                     continue
                 
                 # 提取WGS84坐标
@@ -1087,6 +1108,7 @@ def main():
     parser.add_argument('--fixgps', metavar='PHOTOS_DIR', help='修复照片GPS信息，指定包含照片文件的目录')
     parser.add_argument('-f', '--force', action='store_true', help='覆盖已有的GPS信息）')
     parser.add_argument('-a', '--active', action='store_true', help='覆盖机内的GPS信息（GPS Status为"Measurement Active"）')
+    parser.add_argument('--offset', default='00:00:00', help='同步GPS时加到照片时间上的偏移，格式 HH:MM:SS，支持负数，例如 --offset=-00:05:30')
     
     args = parser.parse_args()
     
@@ -1102,7 +1124,13 @@ def main():
                 print(f"❌ 照片目录不存在: {args.fixgps}")
                 return
             
-            fix_photos_gps(args.kml_file, args.fixgps, args.force, args.active)
+            try:
+                offset = parse_time_offset(args.offset)
+            except ValueError as e:
+                print(f"❌ {e}")
+                return
+
+            fix_photos_gps(args.kml_file, args.fixgps, args.force, args.active, offset)
             return
         
         # 创建分析器
@@ -1155,6 +1183,8 @@ def main():
             print(f"  查询位置: python {os.path.basename(__file__)} \"{args.kml_file}\" -t \"2025-08-23T11:40:15+08:00\"")
             print(f"  修复GPS: python {os.path.basename(__file__)} \"{args.kml_file}\" --fixgps \"/path/to/photos\"")
             print(f"  强制覆盖: python {os.path.basename(__file__)} \"{args.kml_file}\" --fixgps \"/path/to/photos\" -f")
+            print(f"  时间偏移: python {os.path.basename(__file__)} \"{args.kml_file}\" --fixgps \"/path/to/photos\" --offset \"00:05:30\"")
+            print(f"  负数偏移: python {os.path.basename(__file__)} \"{args.kml_file}\" --fixgps \"/path/to/photos\" --offset=-00:05:30")
     
     except Exception as e:
         print(f"❌ 程序执行失败: {e}")
